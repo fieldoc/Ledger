@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Wall (vertical line, left side) -->
+    <path
+        android:pathData="M30,24 L30,96"
+        android:strokeWidth="5"
+        android:strokeColor="#666666"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Ledge (horizontal teal bar) -->
+    <path
+        android:pathData="M30,68 L88,68"
+        android:strokeWidth="5"
+        android:strokeColor="#80CBC4"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Task line 1 (most visible) -->
+    <path
+        android:pathData="M40,56 L78,56"
+        android:strokeWidth="3.5"
+        android:strokeColor="#EEEEEE"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.9"
+        android:fillColor="#00000000" />
+
+    <!-- Task line 2 (medium) -->
+    <path
+        android:pathData="M40,46 L68,46"
+        android:strokeWidth="3.5"
+        android:strokeColor="#EEEEEE"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.55"
+        android:fillColor="#00000000" />
+
+    <!-- Task line 3 (faint) -->
+    <path
+        android:pathData="M40,36 L72,36"
+        android:strokeWidth="3.5"
+        android:strokeColor="#EEEEEE"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.25"
+        android:fillColor="#00000000" />
+</vector>

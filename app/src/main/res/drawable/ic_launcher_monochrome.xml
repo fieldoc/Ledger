@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Wall -->
+    <path
+        android:pathData="M30,24 L30,96"
+        android:strokeWidth="5"
+        android:strokeColor="#000000"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Ledge -->
+    <path
+        android:pathData="M30,68 L88,68"
+        android:strokeWidth="5"
+        android:strokeColor="#000000"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+
+    <!-- Task line 1 -->
+    <path
+        android:pathData="M40,56 L78,56"
+        android:strokeWidth="3.5"
+        android:strokeColor="#000000"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.9"
+        android:fillColor="#00000000" />
+
+    <!-- Task line 2 -->
+    <path
+        android:pathData="M40,46 L68,46"
+        android:strokeWidth="3.5"
+        android:strokeColor="#000000"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.55"
+        android:fillColor="#00000000" />
+
+    <!-- Task line 3 -->
+    <path
+        android:pathData="M40,36 L72,36"
+        android:strokeWidth="3.5"
+        android:strokeColor="#000000"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.25"
+        android:fillColor="#00000000" />
+</vector>

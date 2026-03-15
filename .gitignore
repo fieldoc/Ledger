@@ -1,0 +1,68 @@
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+build/
+
+# Gradle files
+.gradle/
+.gradle-home/
+.gradle-local/
+.gradle-user/
+.gradle-user-home/
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio
+*.iml
+.idea/workspace.xml
+.idea/libraries/
+.idea/modules.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+.idea/caches/
+.idea/dictionaries/
+.idea/shelf/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Heap dumps (huge!)
+*.hprof
+
+# Windows redirect artifact
+nul
+
+# External native builds
+.externalNativeBuild/
+.cxx/
+
+# Captures (Android profiler)
+/captures
+
+# Kotlin
+.kotlin/
+
+# Tool-specific config (local to your machine)
+.claude/
+.gemini/
+.firecrawl/
+.serena/
+.superpowers/
+
+# Google Services config (contains API keys)
+app/google-services.json
