@@ -28,7 +28,6 @@ import com.example.todowallapp.data.repository.GoogleCalendarRepository
 import com.example.todowallapp.data.repository.GoogleTasksRepository
 import com.example.todowallapp.data.repository.WeatherRepository
 import com.example.todowallapp.data.repository.dataStore
-import com.example.todowallapp.security.FirebaseKeySync
 import com.example.todowallapp.security.GeminiKeyStore
 import com.example.todowallapp.security.WeatherKeyStore
 import com.example.todowallapp.util.ConnectivityMonitor
@@ -111,7 +110,6 @@ class TaskWallViewModel(
     private val geminiKeyStore: GeminiKeyStore = GeminiKeyStore(context),
     private val geminiCaptureRepository: GeminiCaptureRepository = GeminiCaptureRepository(),
     private val weatherRepository: WeatherRepository? = null,
-    private val firebaseKeySync: FirebaseKeySync? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TaskWallUiState())
@@ -300,13 +298,6 @@ class TaskWallViewModel(
 
                 // Initialize the repository
                 tasksRepository.initialize(account)
-
-                // Firebase: authenticate and pull keys from cloud
-                firebaseKeySync?.signIn(account)
-                val keysUpdated = firebaseKeySync?.pullKeys() ?: false
-                if (keysUpdated) {
-                    Log.d("TaskWallViewModel", "API keys synced from Firebase")
-                }
 
                 if (calendarAccount != null) {
                     calendarRepository.initialize(calendarAccount)
@@ -526,8 +517,6 @@ class TaskWallViewModel(
                 }
                 // Refresh weather (cache handles throttling — only hits API every 3h)
                 if (syncSuccess) refreshWeather()
-                // Pull API keys from Firebase (no-ops if not configured)
-                firebaseKeySync?.pullKeys()
                 syncSuccess
             } catch (e: Exception) {
                 // Auth errors are re-thrown from loadTaskLists/loadTasksForAllLists
@@ -1465,15 +1454,13 @@ class TaskWallViewModel(
             val geminiKeyStore = GeminiKeyStore(context)
             val weatherKeyStore = WeatherKeyStore(context)
             val geminiCaptureRepository = GeminiCaptureRepository()
-            val firebaseKeySync = FirebaseKeySync(geminiKeyStore, weatherKeyStore)
             return TaskWallViewModel(
                 context = context,
                 authManager = authManager,
                 tasksRepository = tasksRepository,
                 calendarRepository = calendarRepository,
                 geminiKeyStore = geminiKeyStore,
-                geminiCaptureRepository = geminiCaptureRepository,
-                firebaseKeySync = firebaseKeySync
+                geminiCaptureRepository = geminiCaptureRepository
             ) as T
         }
     }

@@ -22,7 +22,6 @@ import com.example.todowallapp.data.model.TaskList
 import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.data.repository.GoogleTasksRepository
-import com.example.todowallapp.security.FirebaseKeySync
 import com.example.todowallapp.security.GeminiKeyStore
 import com.example.todowallapp.voice.VoiceCaptureManager
 import com.example.todowallapp.voice.VoiceInputState
@@ -63,7 +62,6 @@ class PhoneCaptureViewModel(
     private val geminiRepository: GeminiCaptureRepository,
     private val geminiKeyStore: GeminiKeyStore,
     private val pendingCaptureStore: PendingCaptureStore,
-    private val firebaseKeySync: FirebaseKeySync? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -335,9 +333,6 @@ class PhoneCaptureViewModel(
             validation.fold(
                 onSuccess = {
                     geminiKeyStore.setApiKey(key)
-                    firebaseKeySync?.let { sync ->
-                        viewModelScope.launch { sync.pushKeys() }
-                    }
                     _uiState.value = _uiState.value.copy(
                         isValidatingKey = false,
                         geminiKeyPresent = true,
@@ -357,9 +352,6 @@ class PhoneCaptureViewModel(
 
     fun clearGeminiKey() {
         geminiKeyStore.clearApiKey()
-        firebaseKeySync?.let { sync ->
-            viewModelScope.launch { sync.pushKeys() }
-        }
         _uiState.value = _uiState.value.copy(
             geminiKeyPresent = false,
             infoMessage = "Gemini key removed"
@@ -604,7 +596,6 @@ class PhoneCaptureViewModel(
         private val geminiRepository: GeminiCaptureRepository,
         private val geminiKeyStore: GeminiKeyStore,
         private val pendingCaptureStore: PendingCaptureStore,
-        private val firebaseKeySync: FirebaseKeySync? = null
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -613,8 +604,7 @@ class PhoneCaptureViewModel(
                 tasksRepository = tasksRepository,
                 geminiRepository = geminiRepository,
                 geminiKeyStore = geminiKeyStore,
-                pendingCaptureStore = pendingCaptureStore,
-                firebaseKeySync = firebaseKeySync
+                pendingCaptureStore = pendingCaptureStore
             ) as T
         }
     }

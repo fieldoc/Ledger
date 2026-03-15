@@ -50,7 +50,6 @@ import com.example.todowallapp.data.repository.GoogleTasksRepository
 import com.example.todowallapp.data.repository.ModePreferenceRepository
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.data.repository.WeatherRepository
-import com.example.todowallapp.security.FirebaseKeySync
 import com.example.todowallapp.security.GeminiKeyStore
 import com.example.todowallapp.security.WeatherKeyStore
 import com.example.todowallapp.ui.components.PageIndicator
@@ -151,8 +150,6 @@ fun TaskWallApp(
     val pendingCaptureStore = remember { PendingCaptureStore(appContext) }
     val weatherKeyStore = remember { WeatherKeyStore(appContext) }
     val weatherRepository = remember { WeatherRepository(appContext, weatherKeyStore) }
-    val firebaseKeySync = remember { FirebaseKeySync(geminiKeyStore, weatherKeyStore) }
-
     val wallViewModel: TaskWallViewModel = viewModel(
         factory = remember {
             object : ViewModelProvider.Factory {
@@ -163,8 +160,7 @@ fun TaskWallApp(
                         authManager = authManager,
                         tasksRepository = tasksRepository,
                         calendarRepository = calendarRepository,
-                        weatherRepository = weatherRepository,
-                        firebaseKeySync = firebaseKeySync
+                        weatherRepository = weatherRepository
                     ) as T
                 }
             }
@@ -178,8 +174,7 @@ fun TaskWallApp(
                 tasksRepository = tasksRepository,
                 geminiRepository = geminiCaptureRepository,
                 geminiKeyStore = geminiKeyStore,
-                pendingCaptureStore = pendingCaptureStore,
-                firebaseKeySync = firebaseKeySync
+                pendingCaptureStore = pendingCaptureStore
             )
         }
     )
@@ -343,17 +338,14 @@ fun TaskWallApp(
                         onSyncIntervalChange = wallViewModel::updateSyncInterval,
                         onSaveWeatherLocation = { location ->
                             weatherKeyStore.setLocation(location)
-                            scope.launch { firebaseKeySync.pushKeys() }
                             wallViewModel.refreshWeather()
                         },
                         onSaveWeatherApiKey = { key ->
                             weatherKeyStore.setApiKey(key)
-                            scope.launch { firebaseKeySync.pushKeys() }
                             wallViewModel.refreshWeather()
                         },
                         onClearWeatherApiKey = {
                             weatherKeyStore.clearApiKey()
-                            scope.launch { firebaseKeySync.pushKeys() }
                         },
                         onSearchCities = { query ->
                             weatherRepository.searchCities(query).map { suggestion ->
