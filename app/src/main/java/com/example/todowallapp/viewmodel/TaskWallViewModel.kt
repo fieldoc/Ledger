@@ -19,6 +19,7 @@ import com.example.todowallapp.data.model.PromotionAnchor
 import com.example.todowallapp.data.model.PromotionDraft
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskList
+import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.data.model.buildScheduleMapForDate
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.data.model.WeatherCondition
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.TimeoutCancellationException
@@ -56,11 +58,6 @@ import java.time.format.DateTimeFormatter
 /**
  * UI State for the Task Wall screen
  */
-data class TaskListWithTasks(
-    val taskList: TaskList,
-    val tasks: List<Task> = emptyList()
-)
-
 data class TaskWallUiState(
     val authState: AuthState = AuthState.Loading,
     val tasks: List<Task> = emptyList(),
@@ -163,13 +160,23 @@ class TaskWallViewModel(
     private val lightStartHourKey = intPreferencesKey("light_start_hour")
     private val lightEndHourKey = intPreferencesKey("light_end_hour")
 
+    companion object {
+        private const val SILENT_SIGN_IN_TIMEOUT_MS = 3_000L
+        private const val UNDO_TIMEOUT_MS = 5_000L
+        private const val SYNC_FEEDBACK_CLEAR_MS = 3_000L
+        private const val PROMOTION_ANCHOR_EXPIRY_MS = 7_200_000L
+    }
+
     private var autoSyncJob: Job? = null
     private val refreshMutex = Mutex()
-    private var consecutiveSyncFailures = 0
-    private var isReauthenticating = false
+    private val consecutiveSyncFailures = java.util.concurrent.atomic.AtomicInteger(0)
+    private val isReauthenticating = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val signInMutex = Mutex()
+    private val inFlightTaskIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var voiceParseJob: Job? = null
     private var parsedVoiceDueDate: LocalDate? = null
     private var parsedVoiceTargetListId: String? = null
+    private var parsedVoiceParentTaskId: String? = null
 
     // Last sync success tracking
     private var syncFeedbackJob: Job? = null
@@ -191,7 +198,7 @@ class TaskWallViewModel(
             var wasOnline = isOnline.value
             isOnline.collect { online ->
                 if (online && !wasOnline) {
-                    consecutiveSyncFailures = 0
+                    consecutiveSyncFailures.set(0)
                     if (_uiState.value.authState is AuthState.Authenticated) {
                         performRefresh(showSyncIndicator = true)
                     }
@@ -225,9 +232,9 @@ class TaskWallViewModel(
                 ?.let { savedDate -> parseLocalDate(savedDate) }
                 ?: LocalDate.now()
 
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 selectedCalendarDate = selectedCalendarDate
-            )
+            ) }
         }
     }
 
@@ -236,28 +243,28 @@ class TaskWallViewModel(
      */
     fun checkAuthState() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(authState = AuthState.Loading)
+            _uiState.update { it.copy(authState = AuthState.Loading) }
 
             if (authManager.isSignedIn()) {
                 val account = authManager.getCurrentAccount()
                 if (account != null) {
                     onSignedIn(account)
                 } else {
-                    _uiState.value = _uiState.value.copy(authState = AuthState.NotAuthenticated)
+                    _uiState.update { it.copy(authState = AuthState.NotAuthenticated) }
                 }
             } else {
                 // Show sign-in immediately, then try silent sign-in briefly in the background
-                _uiState.value = _uiState.value.copy(authState = AuthState.NotAuthenticated)
+                _uiState.update { it.copy(authState = AuthState.NotAuthenticated) }
 
                 val result = try {
-                    withTimeout(3_000) { authManager.silentSignIn() }
+                    withTimeout(SILENT_SIGN_IN_TIMEOUT_MS) { authManager.silentSignIn() }
                 } catch (e: TimeoutCancellationException) {
                     Result.failure(e)
                 }
                 result.fold(
                     onSuccess = { account -> onSignedIn(account) },
                     onFailure = {
-                        _uiState.value = _uiState.value.copy(authState = AuthState.NotAuthenticated)
+                        _uiState.update { it.copy(authState = AuthState.NotAuthenticated) }
                     }
                 )
             }
@@ -269,55 +276,57 @@ class TaskWallViewModel(
      */
     fun onSignedIn(account: GoogleSignInAccount) {
         viewModelScope.launch {
-            consecutiveSyncFailures = 0
-            val currentAccount = authManager.getCurrentAccount()
-            val calendarAccount = sequenceOf(account, currentAccount)
-                .filterNotNull()
-                .firstOrNull { authManager.hasCalendarScope(it) }
-            val hasCalendarScope = calendarAccount != null
-            _uiState.value = _uiState.value.copy(
-                authState = AuthState.Authenticated(account),
-                isLoading = true,
-                hasCalendarScope = hasCalendarScope,
-                calendarError = null
-            )
+            signInMutex.withLock {
+                consecutiveSyncFailures.set(0)
+                val currentAccount = authManager.getCurrentAccount()
+                val calendarAccount = sequenceOf(account, currentAccount)
+                    .filterNotNull()
+                    .firstOrNull { authManager.hasCalendarScope(it) }
+                val hasCalendarScope = calendarAccount != null
+                _uiState.update { it.copy(
+                    authState = AuthState.Authenticated(account),
+                    isLoading = true,
+                    hasCalendarScope = hasCalendarScope,
+                    calendarError = null
+                ) }
 
-            // Initialize the repository
-            tasksRepository.initialize(account)
+                // Initialize the repository
+                tasksRepository.initialize(account)
 
-            // Firebase: authenticate and pull keys from cloud
-            firebaseKeySync?.signIn(account)
-            val keysUpdated = firebaseKeySync?.pullKeys() ?: false
-            if (keysUpdated) {
-                Log.d("TaskWallViewModel", "API keys synced from Firebase")
+                // Firebase: authenticate and pull keys from cloud
+                firebaseKeySync?.signIn(account)
+                val keysUpdated = firebaseKeySync?.pullKeys() ?: false
+                if (keysUpdated) {
+                    Log.d("TaskWallViewModel", "API keys synced from Firebase")
+                }
+
+                if (calendarAccount != null) {
+                    calendarRepository.initialize(calendarAccount)
+                    loadCalendars()
+                }
+
+                // Load saved task list preference
+                val savedTaskListId = context.dataStore.data
+                    .map { preferences -> preferences[selectedTaskListIdKey] }
+                    .first()
+
+                // Load task lists
+                loadTaskLists(savedTaskListId)
+
+                if (hasCalendarScope) {
+                    loadCalendarRange(CalendarViewMode.MONTH, _uiState.value.selectedCalendarDate)
+                } else {
+                    _uiState.update { it.copy(
+                        calendars = emptyList(),
+                        calendarEvents = emptyList(),
+                        calendarScheduleMap = emptyMap(),
+                        calendarError = "Calendar access needed - press Enter to grant"
+                    ) }
+                }
+
+                // Start auto-sync
+                startAutoSync()
             }
-
-            if (calendarAccount != null) {
-                calendarRepository.initialize(calendarAccount)
-                loadCalendars()
-            }
-
-            // Load saved task list preference
-            val savedTaskListId = context.dataStore.data
-                .map { preferences -> preferences[selectedTaskListIdKey] }
-                .first()
-
-            // Load task lists
-            loadTaskLists(savedTaskListId)
-
-            if (hasCalendarScope) {
-                loadCalendarRange(CalendarViewMode.MONTH, _uiState.value.selectedCalendarDate)
-            } else {
-                _uiState.value = _uiState.value.copy(
-                    calendars = emptyList(),
-                    calendarEvents = emptyList(),
-                    calendarScheduleMap = emptyMap(),
-                    calendarError = "Calendar access needed - press Enter to grant"
-                )
-            }
-
-            // Start auto-sync
-            startAutoSync()
         }
     }
 
@@ -339,28 +348,28 @@ class TaskWallViewModel(
                 val selectedList = sortedTaskLists.find { it.taskList.id == selectedId }?.taskList
                 val selectedTasks = sortedTaskLists.find { it.taskList.id == selectedId }?.tasks.orEmpty()
 
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     taskLists = sortedTaskLists.map { it.taskList },
                     allTaskLists = sortedTaskLists,
                     selectedTaskListId = selectedId,
                     selectedTaskListTitle = selectedList?.title ?: "Tasks",
                     tasks = selectedTasks,
                     isLoading = false
-                )
+                ) }
                 true
             },
             onFailure = { error ->
                 // If this is an auth error, re-throw so performRefresh can attempt re-auth
                 if (error is Exception && GoogleTasksRepository.isAuthError(error)) {
-                    _uiState.value = _uiState.value.copy(isLoading = false)
+                    _uiState.update { it.copy(isLoading = false) }
                     throw error
                 }
                 val message = error.message?.let { ": $it" } ?: ""
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     error = "Failed to load task lists: ${error.javaClass.simpleName}$message",
                     isLoading = false,
                     lastSyncSuccess = false
-                )
+                ) }
                 scheduleSyncFeedbackClear()
                 false
             }
@@ -397,11 +406,11 @@ class TaskWallViewModel(
         }
 
         val syncSuccess = errors.isEmpty()
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { it.copy(
             lastSyncTime = LocalDateTime.now(),
             error = errors.firstOrNull(),
             lastSyncSuccess = syncSuccess
-        )
+        ) }
         scheduleSyncFeedbackClear()
 
         return allTasks
@@ -413,10 +422,10 @@ class TaskWallViewModel(
     private fun scheduleSyncFeedbackClear() {
         syncFeedbackJob?.cancel()
         syncFeedbackJob = viewModelScope.launch {
-            delay(3_000)
+            delay(SYNC_FEEDBACK_CLEAR_MS)
             // Only clear success feedback; keep failure visible so staleness is apparent
-            if (_uiState.value.lastSyncSuccess == true) {
-                _uiState.value = _uiState.value.copy(lastSyncSuccess = null)
+            _uiState.update { state ->
+                if (state.lastSyncSuccess == true) state.copy(lastSyncSuccess = null) else state
             }
         }
     }
@@ -426,25 +435,24 @@ class TaskWallViewModel(
      * Uses isReauthenticating flag to prevent re-auth loops.
      */
     private suspend fun attemptReauthAndRetry(action: suspend () -> Unit) {
-        if (isReauthenticating) return
-        isReauthenticating = true
+        if (!isReauthenticating.compareAndSet(false, true)) return
         try {
             Log.d("TaskWallVM", "Auth token expired, attempting silent re-authentication")
             val result = authManager.silentSignIn()
             result.onSuccess { account ->
                 Log.d("TaskWallVM", "Silent re-auth succeeded, retrying operation")
                 onSignedIn(account)
-                consecutiveSyncFailures = 0
+                consecutiveSyncFailures.set(0)
                 action()
             }.onFailure { error ->
                 Log.e("TaskWallVM", "Silent re-auth failed: ${error.message}")
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     error = "Session expired. Please sign in again.",
                     authState = AuthState.NotAuthenticated
-                )
+                ) }
             }
         } finally {
-            isReauthenticating = false
+            isReauthenticating.set(false)
         }
     }
 
@@ -467,15 +475,15 @@ class TaskWallViewModel(
     private suspend fun performRefresh(showSyncIndicator: Boolean): Boolean {
         if (_uiState.value.authState !is AuthState.Authenticated) return false
 
-        if (refreshMutex.isLocked) return true
+        if (refreshMutex.isLocked) return false
 
         if (!isOnline.value) {
             if (showSyncIndicator) {
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     isSyncing = false,
                     error = "Offline: waiting for connection to sync",
                     lastSyncSuccess = false
-                )
+                ) }
                 scheduleSyncFeedbackClear()
             }
             return false
@@ -483,7 +491,7 @@ class TaskWallViewModel(
 
         return refreshMutex.withLock {
             if (showSyncIndicator) {
-                _uiState.value = _uiState.value.copy(isSyncing = true)
+                _uiState.update { it.copy(isSyncing = true) }
             }
             try {
                 val selectedTaskListId = _uiState.value.selectedTaskListId
@@ -503,10 +511,10 @@ class TaskWallViewModel(
                 }
 
                 val syncSuccess = tasksLoaded && calendarLoaded && (_uiState.value.lastSyncSuccess != false)
-                consecutiveSyncFailures = if (syncSuccess) {
-                    0
+                if (syncSuccess) {
+                    consecutiveSyncFailures.set(0)
                 } else {
-                    (consecutiveSyncFailures + 1).coerceAtMost(3)
+                    consecutiveSyncFailures.updateAndGet { (it + 1).coerceAtMost(3) }
                 }
                 // Refresh weather (cache handles throttling — only hits API every 3h)
                 if (syncSuccess) refreshWeather()
@@ -517,15 +525,15 @@ class TaskWallViewModel(
                 // Auth errors are re-thrown from loadTaskLists/loadTasksForAllLists
                 if (GoogleTasksRepository.isAuthError(e)) {
                     Log.w("TaskWallVM", "Auth error during sync, attempting re-authentication", e)
-                    _uiState.value = _uiState.value.copy(isSyncing = false)
+                    _uiState.update { it.copy(isSyncing = false) }
                     attemptReauthAndRetry { performRefresh(showSyncIndicator) }
                     return@withLock false
                 }
                 // Non-auth exceptions: let the finally block clean up
-                consecutiveSyncFailures = (consecutiveSyncFailures + 1).coerceAtMost(3)
+                consecutiveSyncFailures.updateAndGet { (it + 1).coerceAtMost(3) }
                 false
             } finally {
-                _uiState.value = _uiState.value.copy(isSyncing = false)
+                _uiState.update { it.copy(isSyncing = false) }
             }
         }
     }
@@ -538,11 +546,11 @@ class TaskWallViewModel(
             val selectedListWithTasks = _uiState.value.allTaskLists.find { it.taskList.id == taskListId }
             val taskList = selectedListWithTasks?.taskList
 
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 selectedTaskListId = taskListId,
                 selectedTaskListTitle = taskList?.title ?: "Tasks",
                 tasks = selectedListWithTasks?.tasks.orEmpty()
-            )
+            ) }
 
             // Save preference
             context.dataStore.edit { preferences ->
@@ -562,27 +570,35 @@ class TaskWallViewModel(
             _undoState.value = UndoState(task = task, taskListId = taskListId)
             undoTimeoutJob?.cancel()
             undoTimeoutJob = viewModelScope.launch {
-                delay(5_000)
+                delay(UNDO_TIMEOUT_MS)
                 _undoState.value = null
             }
 
             val completedTask = task.copy(isCompleted = true, completedAt = LocalDateTime.now())
 
             // Optimistic update
+            inFlightTaskIds.add(task.id)
             updateTaskAcrossLists(task.id) { completedTask }
 
             // API call
             val result = tasksRepository.completeTask(taskListId, task.id)
 
             result.onSuccess { serverTask ->
+                inFlightTaskIds.remove(task.id)
                 updateTaskAcrossLists(task.id) { serverTask }
             }
             result.onFailure { error ->
+                inFlightTaskIds.remove(task.id)
                 // Revert on failure
                 updateTaskAcrossLists(task.id) { task }
                 _undoState.value = null
                 undoTimeoutJob?.cancel()
-                _uiState.value = _uiState.value.copy(error = "Failed to complete task: ${error.message}")
+                val exception = error as? Exception
+                if (exception != null && GoogleTasksRepository.isAuthError(exception)) {
+                    attemptReauthAndRetry { performRefresh(false) }
+                    return@launch
+                }
+                _uiState.update { it.copy(error = "Failed to complete task: ${error.message}") }
             }
         }
     }
@@ -614,18 +630,26 @@ class TaskWallViewModel(
             val uncompletedTask = task.copy(isCompleted = false, completedAt = null)
 
             // Optimistic update
+            inFlightTaskIds.add(task.id)
             updateTaskAcrossLists(task.id) { uncompletedTask }
 
             // API call
             val result = tasksRepository.uncompleteTask(taskListId, task.id)
 
             result.onSuccess { serverTask ->
+                inFlightTaskIds.remove(task.id)
                 updateTaskAcrossLists(task.id) { serverTask }
             }
             result.onFailure { error ->
+                inFlightTaskIds.remove(task.id)
                 // Revert on failure
                 updateTaskAcrossLists(task.id) { task }
-                _uiState.value = _uiState.value.copy(error = "Failed to uncomplete task: ${error.message}")
+                val exception = error as? Exception
+                if (exception != null && GoogleTasksRepository.isAuthError(exception)) {
+                    attemptReauthAndRetry { performRefresh(false) }
+                    return@launch
+                }
+                _uiState.update { it.copy(error = "Failed to uncomplete task: ${error.message}") }
             }
         }
     }
@@ -634,13 +658,21 @@ class TaskWallViewModel(
         viewModelScope.launch {
             val taskListId = findTaskListIdForTask(task.id) ?: return@launch
 
+            // Save state before removing for local revert on failure
+            val snapshotLists = _uiState.value.allTaskLists
             removeTaskAcrossLists(task.id)
 
             val result = tasksRepository.deleteTask(taskListId, task.id)
 
             result.onFailure { error ->
-                refresh()
-                _uiState.value = _uiState.value.copy(error = "Failed to delete task: ${error.message}")
+                // Re-insert the task by restoring the snapshot
+                updateUiWithLists(_uiState.value, normalizeTaskLists(snapshotLists))
+                val exception = error as? Exception
+                if (exception != null && GoogleTasksRepository.isAuthError(exception)) {
+                    attemptReauthAndRetry { performRefresh(false) }
+                    return@launch
+                }
+                _uiState.update { it.copy(error = "Failed to delete task: ${error.message}") }
             }
         }
     }
@@ -683,10 +715,12 @@ class TaskWallViewModel(
                     ?: _uiState.value.taskLists.firstOrNull()?.id
                     ?: return@launch
                 val dueDate = currentState.dueDate ?: parsedVoiceDueDate
+                val parentId = parsedVoiceParentTaskId
                 val result = tasksRepository.createTask(
                     taskListId = taskListId,
                     title = currentState.transcribedText,
-                    dueDate = dueDate
+                    dueDate = dueDate,
+                    parentId = parentId
                 )
                 result.fold(
                     onSuccess = {
@@ -744,6 +778,7 @@ class TaskWallViewModel(
                 onSuccess = { parsed ->
                     parsedVoiceDueDate = parsed.dueDate
                     parsedVoiceTargetListId = resolveKnownTaskListId(parsed.targetListId)
+                    parsedVoiceParentTaskId = parsed.parentTaskId
                     voiceCaptureManager.showPreview(
                         transcribedText = parsed.title.ifBlank { normalizedText },
                         dueDate = parsedVoiceDueDate,
@@ -761,6 +796,7 @@ class TaskWallViewModel(
     private fun clearVoiceParsingMetadata() {
         parsedVoiceDueDate = null
         parsedVoiceTargetListId = null
+        parsedVoiceParentTaskId = null
     }
 
     private fun resolveKnownTaskListId(candidateId: String?): String? {
@@ -790,25 +826,26 @@ class TaskWallViewModel(
             val result = calendarRepository.deleteEvent(calendarId, eventId)
             result.fold(
                 onSuccess = {
-                    val state = _uiState.value
-                    val taskId = state.scheduledTaskEventIds.entries.firstOrNull { it.value == eventId }?.key
-                    val updatedEventIds = state.scheduledTaskEventIds.toMutableMap()
-                    val updatedTimes = state.scheduledTaskTimes.toMutableMap()
-                    if (taskId != null) {
-                        updatedEventIds.remove(taskId)
-                        updatedTimes.remove(taskId)
+                    _uiState.update { state ->
+                        val taskId = state.scheduledTaskEventIds.entries.firstOrNull { it.value == eventId }?.key
+                        val updatedEventIds = state.scheduledTaskEventIds.toMutableMap()
+                        val updatedTimes = state.scheduledTaskTimes.toMutableMap()
+                        if (taskId != null) {
+                            updatedEventIds.remove(taskId)
+                            updatedTimes.remove(taskId)
+                        }
+                        state.copy(
+                            scheduledTaskEventIds = updatedEventIds,
+                            scheduledTaskTimes = updatedTimes
+                        )
                     }
-                    _uiState.value = state.copy(
-                        scheduledTaskEventIds = updatedEventIds,
-                        scheduledTaskTimes = updatedTimes
-                    )
                     loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
                 },
                 onFailure = { error ->
                     val message = error.message?.let { ": $it" } ?: ""
-                    _uiState.value = _uiState.value.copy(
+                    _uiState.update { it.copy(
                         calendarError = "Failed to delete event${message}"
-                    )
+                    ) }
                 }
             )
         }
@@ -825,7 +862,7 @@ class TaskWallViewModel(
 
     fun selectCalendarDate(date: LocalDate) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(selectedCalendarDate = date)
+            _uiState.update { it.copy(selectedCalendarDate = date) }
             persistSelectedCalendarDate(date)
             val mode = _uiState.value.calendarViewMode
             when (mode) {
@@ -841,7 +878,7 @@ class TaskWallViewModel(
 
     fun selectCalendar(calendarId: String) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(selectedCalendarId = calendarId)
+            _uiState.update { it.copy(selectedCalendarId = calendarId) }
             val mode = _uiState.value.calendarViewMode
             when (mode) {
                 CalendarViewMode.DAY -> loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
@@ -861,7 +898,7 @@ class TaskWallViewModel(
     }
 
     fun setCalendarViewMode(mode: CalendarViewMode) {
-        _uiState.value = _uiState.value.copy(calendarViewMode = mode)
+        _uiState.update { it.copy(calendarViewMode = mode) }
         loadCalendarRange(mode, _uiState.value.selectedCalendarDate)
     }
 
@@ -870,7 +907,7 @@ class TaskWallViewModel(
 
         viewModelScope.launch {
             if (!_uiState.value.hasCalendarScope) return@launch
-            _uiState.value = _uiState.value.copy(isCalendarLoading = true, calendarError = null)
+            _uiState.update { it.copy(isCalendarLoading = true, calendarError = null) }
             val calendarId = _uiState.value.selectedCalendarId
 
             val (start, end) = when (mode) {
@@ -897,24 +934,24 @@ class TaskWallViewModel(
                 else -> return@launch
             }
 
-            _uiState.value = _uiState.value.copy(calendarRangeStart = start)
+            _uiState.update { it.copy(calendarRangeStart = start) }
 
             calendarRepository.getEventsForDateRange(start, end, calendarId)
                 .onSuccess { grouped ->
-                    _uiState.value = _uiState.value.copy(
+                    _uiState.update { it.copy(
                         eventsForRange = grouped,
                         isCalendarLoading = false,
                         calendarError = null
-                    )
+                    ) }
                 }
                 .onFailure { error ->
                     if (isCalendarForbidden(error)) {
                         handleCalendarForbidden(error)
                     } else {
-                        _uiState.value = _uiState.value.copy(
+                        _uiState.update { it.copy(
                             isCalendarLoading = false,
                             calendarError = error.message
-                        )
+                        ) }
                     }
                 }
         }
@@ -927,82 +964,91 @@ class TaskWallViewModel(
     ) {
         if (_uiState.value.authState !is AuthState.Authenticated) return
         if (!_uiState.value.hasCalendarScope) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 calendarError = "Calendar access needed - press Enter to grant"
-            )
+            ) }
             return
         }
 
-        val selectedCalendarId = _uiState.value.selectedCalendarId
-            .takeIf { id -> _uiState.value.calendars.any { it.id == id && it.isWritable } }
-            ?: _uiState.value.calendars.firstOrNull { it.isWritable }?.id
+        val currentState = _uiState.value
+        val selectedCalendarId = currentState.selectedCalendarId
+            .takeIf { id -> currentState.calendars.any { it.id == id && it.isWritable } }
+            ?: currentState.calendars.firstOrNull { it.isWritable }?.id
             ?: GoogleCalendarRepository.PRIMARY_CALENDAR_ID
 
         val defaultStart = prefilledStartTime
-            ?: _uiState.value.promotionAnchor?.endsAt
+            ?: currentState.promotionAnchor?.endsAt
             ?: nextQuarterHour(LocalDateTime.now())
 
         val duration = prefilledDurationMinutes
-            ?: _uiState.value.promotionDraft?.durationMinutes
+            ?: currentState.promotionDraft?.durationMinutes
                 ?.takeIf { it in durationOptionsMinutes }
             ?: 30
 
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { it.copy(
             promotionDraft = PromotionDraft(
                 task = task,
                 startDateTime = defaultStart,
                 durationMinutes = duration,
                 calendarId = selectedCalendarId
             )
-        )
+        ) }
     }
 
     fun dismissPromotionDraft() {
-        _uiState.value = _uiState.value.copy(promotionDraft = null)
+        _uiState.update { it.copy(promotionDraft = null) }
     }
 
     fun cyclePromotionDuration(forward: Boolean) {
-        val draft = _uiState.value.promotionDraft ?: return
-        val currentIndex = durationOptionsMinutes.indexOf(draft.durationMinutes).takeIf { it >= 0 } ?: 1
-        val nextIndex = if (forward) {
-            (currentIndex + 1) % durationOptionsMinutes.size
-        } else {
-            (currentIndex - 1 + durationOptionsMinutes.size) % durationOptionsMinutes.size
+        _uiState.update { state ->
+            val draft = state.promotionDraft ?: return@update state
+            val currentIndex = durationOptionsMinutes.indexOf(draft.durationMinutes).takeIf { it >= 0 } ?: 1
+            val nextIndex = if (forward) {
+                (currentIndex + 1) % durationOptionsMinutes.size
+            } else {
+                (currentIndex - 1 + durationOptionsMinutes.size) % durationOptionsMinutes.size
+            }
+            state.copy(
+                promotionDraft = draft.copy(durationMinutes = durationOptionsMinutes[nextIndex])
+            )
         }
-        _uiState.value = _uiState.value.copy(
-            promotionDraft = draft.copy(durationMinutes = durationOptionsMinutes[nextIndex])
-        )
     }
 
     fun shiftPromotionStartByMinutes(minutes: Long) {
-        val draft = _uiState.value.promotionDraft ?: return
-        _uiState.value = _uiState.value.copy(
-            promotionDraft = draft.copy(startDateTime = draft.startDateTime.plusMinutes(minutes))
-        )
+        _uiState.update { state ->
+            val draft = state.promotionDraft ?: return@update state
+            state.copy(
+                promotionDraft = draft.copy(startDateTime = draft.startDateTime.plusMinutes(minutes))
+            )
+        }
     }
 
     fun cyclePromotionCalendar(forward: Boolean) {
-        val draft = _uiState.value.promotionDraft ?: return
-        val writableCalendars = _uiState.value.calendars.filter { it.isWritable }
-        if (writableCalendars.isEmpty()) return
-        val currentIndex = writableCalendars.indexOfFirst { it.id == draft.calendarId }.takeIf { it >= 0 } ?: 0
-        val nextIndex = if (forward) {
-            (currentIndex + 1) % writableCalendars.size
-        } else {
-            (currentIndex - 1 + writableCalendars.size) % writableCalendars.size
+        _uiState.update { state ->
+            val draft = state.promotionDraft ?: return@update state
+            val writableCalendars = state.calendars.filter { it.isWritable }
+            if (writableCalendars.isEmpty()) return@update state
+            val currentIndex = writableCalendars.indexOfFirst { it.id == draft.calendarId }.takeIf { it >= 0 } ?: 0
+            val nextIndex = if (forward) {
+                (currentIndex + 1) % writableCalendars.size
+            } else {
+                (currentIndex - 1 + writableCalendars.size) % writableCalendars.size
+            }
+            val nextCalendarId = writableCalendars[nextIndex].id
+            state.copy(
+                selectedCalendarId = nextCalendarId,
+                promotionDraft = draft.copy(calendarId = nextCalendarId)
+            )
         }
-        val nextCalendarId = writableCalendars[nextIndex].id
-        _uiState.value = _uiState.value.copy(
-            selectedCalendarId = nextCalendarId,
-            promotionDraft = draft.copy(calendarId = nextCalendarId)
-        )
     }
 
     fun setPromotionStartTime(startDateTime: LocalDateTime) {
-        val draft = _uiState.value.promotionDraft ?: return
-        _uiState.value = _uiState.value.copy(
-            promotionDraft = draft.copy(startDateTime = startDateTime)
-        )
+        _uiState.update { state ->
+            val draft = state.promotionDraft ?: return@update state
+            state.copy(
+                promotionDraft = draft.copy(startDateTime = startDateTime)
+            )
+        }
     }
 
     fun confirmPromotion() {
@@ -1010,14 +1056,14 @@ class TaskWallViewModel(
         viewModelScope.launch {
             if (_uiState.value.authState !is AuthState.Authenticated) return@launch
             if (!_uiState.value.hasCalendarScope) {
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     calendarError = "Calendar access needed - press Enter to grant",
                     promotionDraft = null
-                )
+                ) }
                 return@launch
             }
 
-            _uiState.value = _uiState.value.copy(isCalendarLoading = true, calendarError = null)
+            _uiState.update { it.copy(isCalendarLoading = true, calendarError = null) }
 
             val result = calendarRepository.createEvent(
                 task = draft.task,
@@ -1028,23 +1074,25 @@ class TaskWallViewModel(
 
             result.fold(
                 onSuccess = { event ->
-                    val updatedScheduleMap = _uiState.value.scheduledTaskEventIds.toMutableMap()
-                    updatedScheduleMap[draft.task.id] = event.id
-                    val updatedScheduleTimes = _uiState.value.scheduledTaskTimes.toMutableMap()
-                    updatedScheduleTimes[draft.task.id] = draft.startDateTime
                     loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
-                    _uiState.value = _uiState.value.copy(
-                        promotionDraft = null,
-                        promotionAnchor = PromotionAnchor(
-                            previousEventTitle = event.title,
-                            endsAt = event.endDateTime ?: draft.endDateTime
-                        ),
-                        scheduledTaskEventIds = updatedScheduleMap,
-                        scheduledTaskTimes = updatedScheduleTimes,
-                        promotionSuccessMessage = "Scheduled \"${draft.task.title}\" at ${
-                            draft.startDateTime.format(promotionTimeFormatter)
-                        }"
-                    )
+                    _uiState.update { state ->
+                        val updatedScheduleMap = state.scheduledTaskEventIds.toMutableMap()
+                        updatedScheduleMap[draft.task.id] = event.id
+                        val updatedScheduleTimes = state.scheduledTaskTimes.toMutableMap()
+                        updatedScheduleTimes[draft.task.id] = draft.startDateTime
+                        state.copy(
+                            promotionDraft = null,
+                            promotionAnchor = PromotionAnchor(
+                                previousEventTitle = event.title,
+                                endsAt = event.endDateTime ?: draft.endDateTime
+                            ),
+                            scheduledTaskEventIds = updatedScheduleMap,
+                            scheduledTaskTimes = updatedScheduleTimes,
+                            promotionSuccessMessage = "Scheduled \"${draft.task.title}\" at ${
+                                draft.startDateTime.format(promotionTimeFormatter)
+                            }"
+                        )
+                    }
                     schedulePromotionAnchorExpiry()
                 },
                 onFailure = { error ->
@@ -1053,30 +1101,30 @@ class TaskWallViewModel(
                         return@fold
                     }
                     val message = error.message?.let { ": $it" } ?: ""
-                    _uiState.value = _uiState.value.copy(
+                    _uiState.update { it.copy(
                         promotionDraft = null,
                         isCalendarLoading = false,
                         promotionSuccessMessage = null,
                         calendarError = "Failed to create calendar event${message}"
-                    )
+                    ) }
                 }
             )
         }
     }
 
     fun clearPromotionSuccessMessage() {
-        _uiState.value = _uiState.value.copy(promotionSuccessMessage = null)
+        _uiState.update { it.copy(promotionSuccessMessage = null) }
     }
 
     fun clearCalendarError() {
-        _uiState.value = _uiState.value.copy(calendarError = null)
+        _uiState.update { it.copy(calendarError = null) }
     }
 
     /**
      * Clear error message
      */
     fun clearError() {
-        _uiState.value = _uiState.value.copy(error = null)
+        _uiState.update { it.copy(error = null) }
     }
 
     /**
@@ -1085,9 +1133,9 @@ class TaskWallViewModel(
     fun signOut() {
         viewModelScope.launch {
             autoSyncJob?.cancel()
-            consecutiveSyncFailures = 0
+            consecutiveSyncFailures.set(0)
             authManager.signOut()
-            _uiState.value = TaskWallUiState(authState = AuthState.NotAuthenticated)
+            _uiState.update { TaskWallUiState(authState = AuthState.NotAuthenticated) }
         }
     }
 
@@ -1157,29 +1205,29 @@ class TaskWallViewModel(
 
     private fun nextAutoSyncDelayMillis(): Long {
         val baseDelay = _syncIntervalMinutes.value * 60_000L
-        val backoffMultiplier = 1L shl consecutiveSyncFailures.coerceAtMost(3)
+        val backoffMultiplier = 1L shl consecutiveSyncFailures.get().coerceAtMost(3)
         return baseDelay * backoffMultiplier
     }
 
     private suspend fun loadCalendarForDateInternal(date: LocalDate): Boolean {
         if (_uiState.value.authState !is AuthState.Authenticated) return false
         if (!_uiState.value.hasCalendarScope) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 selectedCalendarDate = date,
                 calendars = emptyList(),
                 calendarEvents = emptyList(),
                 calendarScheduleMap = emptyMap(),
                 isCalendarLoading = false,
                 calendarError = "Calendar access needed - press Enter to grant"
-            )
+            ) }
             return false
         }
 
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { it.copy(
             selectedCalendarDate = date,
             isCalendarLoading = true,
             calendarError = null
-        )
+        ) }
 
         return calendarRepository.getEventsForDate(
             date = date,
@@ -1199,20 +1247,22 @@ class TaskWallViewModel(
                         taskId to start
                     }
                     .toMap()
-                val mergedEventIds = _uiState.value.scheduledTaskEventIds.toMutableMap().apply {
-                    putAll(promotedEventIdsByTask)
+                _uiState.update { state ->
+                    val mergedEventIds = state.scheduledTaskEventIds.toMutableMap().apply {
+                        putAll(promotedEventIdsByTask)
+                    }
+                    val mergedStartTimes = state.scheduledTaskTimes.toMutableMap().apply {
+                        putAll(promotedStartTimesByTask)
+                    }
+                    state.copy(
+                        calendarEvents = events,
+                        calendarScheduleMap = buildScheduleMapForDate(events, date),
+                        scheduledTaskEventIds = mergedEventIds,
+                        scheduledTaskTimes = mergedStartTimes,
+                        isCalendarLoading = false,
+                        calendarError = null
+                    )
                 }
-                val mergedStartTimes = _uiState.value.scheduledTaskTimes.toMutableMap().apply {
-                    putAll(promotedStartTimesByTask)
-                }
-                _uiState.value = _uiState.value.copy(
-                    calendarEvents = events,
-                    calendarScheduleMap = buildScheduleMapForDate(events, date),
-                    scheduledTaskEventIds = mergedEventIds,
-                    scheduledTaskTimes = mergedStartTimes,
-                    isCalendarLoading = false,
-                    calendarError = null
-                )
                 true
             },
             onFailure = { error ->
@@ -1221,12 +1271,12 @@ class TaskWallViewModel(
                     return@fold false
                 }
                 val message = error.message?.let { ": $it" } ?: ""
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     calendarEvents = emptyList(),
                     calendarScheduleMap = emptyMap(),
                     isCalendarLoading = false,
                     calendarError = "Failed to load calendar${message}"
-                )
+                ) }
                 false
             }
         )
@@ -1236,15 +1286,17 @@ class TaskWallViewModel(
         calendarRepository.getCalendars().fold(
             onSuccess = { calendars ->
                 val writableCalendars = calendars.filter { it.isWritable }
-                val selected = _uiState.value.selectedCalendarId
-                    .takeIf { id -> writableCalendars.any { it.id == id } }
-                    ?: writableCalendars.firstOrNull { it.isPrimary }?.id
-                    ?: writableCalendars.firstOrNull()?.id
-                    ?: GoogleCalendarRepository.PRIMARY_CALENDAR_ID
-                _uiState.value = _uiState.value.copy(
-                    calendars = calendars,
-                    selectedCalendarId = selected
-                )
+                _uiState.update { state ->
+                    val selected = state.selectedCalendarId
+                        .takeIf { id -> writableCalendars.any { it.id == id } }
+                        ?: writableCalendars.firstOrNull { it.isPrimary }?.id
+                        ?: writableCalendars.firstOrNull()?.id
+                        ?: GoogleCalendarRepository.PRIMARY_CALENDAR_ID
+                    state.copy(
+                        calendars = calendars,
+                        selectedCalendarId = selected
+                    )
+                }
             },
             onFailure = { error ->
                 if (isCalendarForbidden(error)) {
@@ -1252,11 +1304,11 @@ class TaskWallViewModel(
                     return@fold
                 }
                 val message = error.message?.let { ": $it" } ?: ""
-                _uiState.value = _uiState.value.copy(
+                _uiState.update { it.copy(
                     calendars = emptyList(),
                     selectedCalendarId = GoogleCalendarRepository.PRIMARY_CALENDAR_ID,
                     calendarError = "Failed to load calendars$message"
-                )
+                ) }
             }
         )
     }
@@ -1274,8 +1326,8 @@ class TaskWallViewModel(
     private fun schedulePromotionAnchorExpiry() {
         promotionAnchorExpiryJob?.cancel()
         promotionAnchorExpiryJob = viewModelScope.launch {
-            delay(2 * 60 * 60 * 1000L)
-            _uiState.value = _uiState.value.copy(promotionAnchor = null)
+            delay(PROMOTION_ANCHOR_EXPIRY_MS)
+            _uiState.update { it.copy(promotionAnchor = null) }
         }
     }
 
@@ -1300,7 +1352,7 @@ class TaskWallViewModel(
         val hasScopeNow = authManager.hasCalendarScope(account)
 
         if (!hasScopeNow) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.update { it.copy(
                 hasCalendarScope = false,
                 calendars = emptyList(),
                 calendarEvents = emptyList(),
@@ -1308,16 +1360,16 @@ class TaskWallViewModel(
                 promotionDraft = null,
                 isCalendarLoading = false,
                 calendarError = "Calendar access needed - press Enter to grant"
-            )
+            ) }
             return
         }
 
         val detail = error.message?.takeIf { it.isNotBlank() } ?: "Forbidden"
-        _uiState.value = _uiState.value.copy(
+        _uiState.update { it.copy(
             promotionDraft = null,
             isCalendarLoading = false,
             calendarError = "Calendar API denied access (403). Verify Calendar API is enabled for your OAuth client. $detail"
-        )
+        ) }
     }
 
     private fun normalizeTaskLists(taskLists: List<TaskListWithTasks>): List<TaskListWithTasks> {
@@ -1337,11 +1389,13 @@ class TaskWallViewModel(
             ?.tasks
             .orEmpty()
 
-        _uiState.value = currentState.copy(
-            allTaskLists = normalizedTaskLists,
-            taskLists = normalizedTaskLists.map { it.taskList },
-            tasks = selectedTasks
-        )
+        _uiState.update {
+            currentState.copy(
+                allTaskLists = normalizedTaskLists,
+                taskLists = normalizedTaskLists.map { it.taskList },
+                tasks = selectedTasks
+            )
+        }
     }
 
     private fun updateTaskAcrossLists(taskId: String, update: (Task) -> Task) {

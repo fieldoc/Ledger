@@ -9,7 +9,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
@@ -54,30 +56,28 @@ import androidx.compose.ui.unit.dp
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskUrgency
 import com.example.todowallapp.ui.theme.LocalWallColors
+import com.example.todowallapp.ui.theme.urgencyColor
 import com.example.todowallapp.ui.theme.WallAnimations
 import com.example.todowallapp.ui.theme.WallShapes
 import kotlinx.coroutines.delay
 
 import androidx.compose.ui.text.font.FontWeight
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PhoneTaskItem(
     task: Task,
     onTaskToggle: (Task) -> Unit,
     children: List<Task> = emptyList(),
     onToggleChildComplete: (Task) -> Unit = onTaskToggle,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
     val cardShape = RoundedCornerShape(8.dp)
     val urgency = remember(task.id, task.dueDate, task.isCompleted) { task.getUrgencyLevel() }
     val showUrgencyBar = !task.isCompleted && urgency != TaskUrgency.NORMAL
-    val urgencyColor = when (urgency) {
-        TaskUrgency.OVERDUE -> colors.urgencyOverdue
-        TaskUrgency.DUE_TODAY -> colors.urgencyDueToday
-        TaskUrgency.DUE_SOON -> colors.urgencyDueSoon
-        else -> Color.Transparent
-    }
+    val urgencyBarColor = if (showUrgencyBar) colors.urgencyColor(urgency) else Color.Transparent
     val urgencyAlpha by animateFloatAsState(
         targetValue = if (showUrgencyBar) 1f else 0f,
         animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
@@ -111,12 +111,13 @@ fun PhoneTaskItem(
                     }
                     .clip(cardShape)
                     .border(1.dp, colors.borderColor, cardShape)
-                    .clickable(
+                    .combinedClickable(
                         interactionSource = interactionSource,
                         indication = null,
                         role = Role.Checkbox,
                         onClickLabel = if (task.isCompleted) "Mark task as incomplete" else "Mark task as complete",
-                        onClick = { onTaskToggle(task) }
+                        onClick = { onTaskToggle(task) },
+                        onLongClick = onLongClick
                     )
                     .background(Color.Transparent)
                     .alpha(contentAlpha)
@@ -129,7 +130,7 @@ fun PhoneTaskItem(
                         .height(1.dp)
                         .background(
                             Brush.horizontalGradient(
-                                listOf(Color.Transparent, Color(0x26FFFFFF), Color.Transparent)
+                                listOf(Color.Transparent, colors.rimGlossStrong, Color.Transparent)
                             )
                         )
                 )
@@ -143,7 +144,7 @@ fun PhoneTaskItem(
                         .alpha(urgencyAlpha)
                         .background(
                             brush = Brush.verticalGradient(
-                                colors = listOf(urgencyColor, urgencyColor.copy(alpha = 0.3f))
+                                colors = listOf(urgencyBarColor, urgencyBarColor.copy(alpha = 0.3f))
                             )
                         )
                 )
@@ -207,7 +208,7 @@ fun PhoneTaskItem(
                             )
                             Icon(
                                 imageVector = Icons.Filled.KeyboardArrowDown,
-                                contentDescription = null,
+                                contentDescription = if (childrenExpanded) "Collapse subtasks" else "Expand subtasks",
                                 tint = colors.textMuted,
                                 modifier = Modifier
                                     .size(16.dp)

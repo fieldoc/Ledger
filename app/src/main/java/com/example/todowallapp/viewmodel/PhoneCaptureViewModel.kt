@@ -18,6 +18,7 @@ import com.example.todowallapp.capture.repository.PendingCaptureStore
 import com.example.todowallapp.capture.repository.TaskCommitGateway
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskList
+import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.data.repository.GoogleTasksRepository
 import com.example.todowallapp.security.FirebaseKeySync
@@ -29,17 +30,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
-
-data class PhoneTaskListWithTasks(
-    val taskList: TaskList,
-    val tasks: List<Task>
-)
 
 data class PhoneCaptureUiState(
     val sessionReady: Boolean = false,
@@ -48,14 +45,15 @@ data class PhoneCaptureUiState(
     val isParsingCapture: Boolean = false,
     val isCommittingCapture: Boolean = false,
     val isValidatingKey: Boolean = false,
-    val taskLists: List<PhoneTaskListWithTasks> = emptyList(),
+    val taskLists: List<TaskListWithTasks> = emptyList(),
     val expandedListIds: Set<String> = emptySet(),
     val parsedCapture: ParsedCapture? = null,
     val pendingCaptures: List<PendingCaptureRecord> = emptyList(),
     val geminiKeyPresent: Boolean = false,
     val showVoiceSheet: Boolean = false,
     val error: String? = null,
-    val infoMessage: String? = null
+    val infoMessage: String? = null,
+    val undoTask: Task? = null
 )
 
 class PhoneCaptureViewModel(
@@ -82,6 +80,10 @@ class PhoneCaptureViewModel(
     private var voiceParseJob: Job? = null
     private var parsedVoiceDueDate: LocalDate? = null
     private var parsedVoiceTargetListId: String? = null
+
+    private data class PhoneUndoState(val task: Task, val taskListId: String)
+    private val _undoState = MutableStateFlow<PhoneUndoState?>(null)
+    private var undoTimeoutJob: Job? = null
 
     private val commitOrchestrator = CaptureCommitOrchestrator(
         gateway = object : TaskCommitGateway {
@@ -179,6 +181,8 @@ class PhoneCaptureViewModel(
             ?.id
             ?: return
 
+        val isCompleting = !task.isCompleted
+
         viewModelScope.launch {
             val result = if (task.isCompleted) {
                 tasksRepository.uncompleteTask(taskListId, task.id)
@@ -187,13 +191,47 @@ class PhoneCaptureViewModel(
             }
 
             result.fold(
-                onSuccess = { refreshTaskListsWithIndicator() },
+                onSuccess = {
+                    if (isCompleting) {
+                        _undoState.value = PhoneUndoState(task, taskListId)
+                        _uiState.value = _uiState.value.copy(undoTask = task)
+                        undoTimeoutJob?.cancel()
+                        undoTimeoutJob = viewModelScope.launch {
+                            delay(5_000)
+                            _undoState.value = null
+                            _uiState.value = _uiState.value.copy(undoTask = null)
+                        }
+                    }
+                    refreshTaskListsWithIndicator()
+                },
                 onFailure = { error ->
                     _uiState.value = _uiState.value.copy(
                         error = "Failed to update task: ${error.message ?: error.javaClass.simpleName}"
                     )
                 }
             )
+        }
+    }
+
+    fun undoCompletion() {
+        val undo = _undoState.value ?: return
+        undoTimeoutJob?.cancel()
+        _undoState.value = null
+        _uiState.value = _uiState.value.copy(undoTask = null)
+        viewModelScope.launch {
+            tasksRepository.uncompleteTask(undo.taskListId, undo.task.id)
+            refreshTaskListsWithIndicator()
+        }
+    }
+
+    fun deleteTask(task: Task) {
+        viewModelScope.launch {
+            val taskListId = _uiState.value.taskLists
+                .firstOrNull { tl -> tl.tasks.any { it.id == task.id } }
+                ?.taskList?.id ?: return@launch
+            tasksRepository.deleteTask(taskListId, task.id).onSuccess {
+                refreshTaskListsWithIndicator()
+            }
         }
     }
 
@@ -592,14 +630,14 @@ class PhoneCaptureViewModel(
         )
     }
 
-    private suspend fun loadTaskLists(): Result<List<PhoneTaskListWithTasks>> = withContext(Dispatchers.IO) {
+    private suspend fun loadTaskLists(): Result<List<TaskListWithTasks>> = withContext(Dispatchers.IO) {
         runCatching {
             val lists = tasksRepository.getTaskLists().getOrThrow()
             val tasksByList = coroutineScope {
                 lists.map { list ->
                     async {
                         val tasks = tasksRepository.getTasks(list.id).getOrElse { emptyList() }
-                        PhoneTaskListWithTasks(
+                        TaskListWithTasks(
                             taskList = list,
                             tasks = sortTasksForDisplay(tasks)
                         )
@@ -608,7 +646,7 @@ class PhoneCaptureViewModel(
             }.awaitAll()
 
             tasksByList
-                .sortedWith(compareBy<PhoneTaskListWithTasks> { it.tasks.none { task -> !task.isCompleted } }.thenBy { it.taskList.title.lowercase() })
+                .sortedWith(compareBy<TaskListWithTasks> { it.tasks.none { task -> !task.isCompleted } }.thenBy { it.taskList.title.lowercase() })
         }
     }
 

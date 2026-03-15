@@ -545,10 +545,14 @@ private fun WallModeContent(
             }
         }
 
+        var calendarInitialized by remember { mutableStateOf(false) }
         LaunchedEffect(pagerState.currentPage, uiState.hasCalendarScope) {
             if (pagerState.currentPage == 1 && uiState.hasCalendarScope) {
-                // Default to MONTH view on calendar entry
-                viewModel.setCalendarViewMode(CalendarViewMode.MONTH)
+                if (!calendarInitialized) {
+                    // Default to MONTH view on first calendar entry only
+                    viewModel.setCalendarViewMode(CalendarViewMode.MONTH)
+                    calendarInitialized = true
+                }
             }
         }
 
@@ -675,7 +679,9 @@ private fun PhoneModeContent(
             onSettingsClick = onShowPhoneSettings,
             onSaveCaptureForRetry = phoneViewModel::saveLastCaptureForRetry,
             onDismissMessage = phoneViewModel::clearMessage,
-            onToggleListExpanded = phoneViewModel::toggleListExpanded
+            onToggleListExpanded = phoneViewModel::toggleListExpanded,
+            onDeleteTask = phoneViewModel::deleteTask,
+            onUndoCompletion = phoneViewModel::undoCompletion
         )
     }
 

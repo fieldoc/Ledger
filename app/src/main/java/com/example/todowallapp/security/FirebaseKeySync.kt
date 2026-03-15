@@ -45,9 +45,10 @@ class FirebaseKeySync(
         }
         withContext(Dispatchers.IO) {
             try {
+                val firebaseAuth = auth ?: return@withContext
                 val credential = GoogleAuthProvider.getCredential(idToken, null)
-                auth!!.signInWithCredential(credential).await()
-                Log.d(tag, "Firebase auth succeeded for uid=${auth!!.currentUser?.uid}")
+                firebaseAuth.signInWithCredential(credential).await()
+                Log.d(tag, "Firebase auth succeeded for uid=${firebaseAuth.currentUser?.uid}")
             } catch (e: Exception) {
                 Log.e(tag, "Firebase auth failed", e)
             }

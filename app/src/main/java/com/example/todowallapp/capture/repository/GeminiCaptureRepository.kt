@@ -14,7 +14,7 @@ import java.net.URL
 import java.time.LocalDate
 
 private const val GEMINI_BASE_URL =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 data class ParsedVoiceTask(
     val title: String,
@@ -171,15 +171,6 @@ class GeminiCaptureRepository(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: error("Gemini did not return text content")
-    }
-
-    private fun extractErrorMessage(responseBody: String): String {
-        return runCatching {
-            JsonParser.parseString(responseBody).asJsonObject
-                .getAsJsonObject("error")
-                ?.get("message")
-                ?.asString
-        }.getOrNull().orEmpty().ifBlank { "Unknown error" }
     }
 
     private fun buildPrompt(
@@ -384,6 +375,28 @@ private class HttpGeminiApiClient(
 ) : GeminiApiClient {
 
     override fun generateContent(apiKey: String, requestBody: JsonObject): String {
+        val maxRetries = 2
+        var lastException: Exception? = null
+
+        for (attempt in 0..maxRetries) {
+            if (attempt > 0) {
+                Thread.sleep(attempt * 1000L) // 1s, 2s backoff
+            }
+            try {
+                val result = doRequest(apiKey, requestBody)
+                return result
+            } catch (e: RetryableGeminiException) {
+                lastException = e
+                if (attempt == maxRetries) break
+                // retry on 429, 500, 503
+            } catch (e: Exception) {
+                throw e // non-retryable, throw immediately
+            }
+        }
+        throw lastException ?: IllegalStateException("Gemini request failed after retries")
+    }
+
+    private fun doRequest(apiKey: String, requestBody: JsonObject): String {
         val endpoint = "$GEMINI_BASE_URL?key=$apiKey"
         val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -412,11 +425,22 @@ private class HttpGeminiApiClient(
                         ?.get("message")
                         ?.asString
                 }.getOrNull().orEmpty().ifBlank { "Unknown error" }
-                error("Gemini request failed ($responseCode): $errorMessage")
+
+                val sanitized = sanitizeErrorMessage(errorMessage, apiKey)
+
+                if (responseCode in listOf(429, 500, 503)) {
+                    throw RetryableGeminiException("Gemini request failed ($responseCode): $sanitized")
+                }
+                error("Gemini request failed ($responseCode): $sanitized")
             }
 
             body
         }
+    }
+
+    private fun sanitizeErrorMessage(message: String, apiKey: String): String {
+        if (apiKey.isBlank()) return message
+        return message.replace(apiKey, "***")
     }
 
     private inline fun <T> HttpURLConnection.useAndDisconnect(block: HttpURLConnection.() -> T): T {
@@ -426,4 +450,6 @@ private class HttpGeminiApiClient(
             disconnect()
         }
     }
+
+    private class RetryableGeminiException(message: String) : Exception(message)
 }

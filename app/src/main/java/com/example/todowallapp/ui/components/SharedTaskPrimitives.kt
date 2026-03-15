@@ -137,7 +137,7 @@ internal fun TaskStatusIndicator(
             if (isCompleted) {
                 Icon(
                     imageVector = Icons.Filled.Check,
-                    contentDescription = null,
+                    contentDescription = "Task completed",
                     tint = colors.surfaceCard,
                     modifier = Modifier
                         .size(checkmarkSize)

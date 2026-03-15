@@ -148,7 +148,7 @@ import com.example.todowallapp.ui.theme.WallShapes
 import com.example.todowallapp.ui.utils.AppHapticPattern
 import com.example.todowallapp.ui.utils.performAppHaptic
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
-import com.example.todowallapp.viewmodel.TaskListWithTasks
+import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.viewmodel.ThemeMode
 import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.Job
@@ -697,6 +697,11 @@ fun TaskWallScreen(
             .focusRequester(focusRequester)
             .focusable()
             .onKeyEvent { keyEvent ->
+                // Undo toast intercept: Enter while undo is visible triggers undo
+                if (undoVisible && keyEvent.type == KeyEventType.KeyUp && keyEvent.key in listOf(Key.Enter, Key.NumPadEnter)) {
+                    onUndo()
+                    return@onKeyEvent true
+                }
                 // Encoder navigation when context menu is open
                 if (contextMenuTask != null) {
                     when (keyEvent.type) {
@@ -1110,7 +1115,7 @@ private fun FolderSection(
             )
             .clip(sectionShape)
             .background(sectionBackground)
-            .then(if (isExpanded && !isAmbientMode) Modifier.border(1.dp, Color(0x1AFFFFFF), sectionShape) else Modifier)
+            .then(if (isExpanded && !isAmbientMode) Modifier.border(1.dp, colors.rimGloss, sectionShape) else Modifier)
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
@@ -1329,6 +1334,12 @@ private fun buildFocusOrder(models: List<FolderSectionModel>, expandedFolderId: 
                     focusOrder += FocusNode(key = taskFocusKey(folderId, child.id), folderId = folderId, type = FocusNodeType.PENDING_CHILD, task = child)
                 }
             }
+            if (model.shownCompletedTasks.isNotEmpty()) {
+                focusOrder += FocusNode(key = completedHeaderKey(folderId), folderId = folderId, type = FocusNodeType.COMPLETED_HEADER)
+                model.shownCompletedTasks.forEach { task ->
+                    focusOrder += FocusNode(key = taskFocusKey(folderId, task.id), folderId = folderId, type = FocusNodeType.COMPLETED_TASK, task = task)
+                }
+            }
         }
     }
     return focusOrder
@@ -1417,7 +1428,7 @@ private fun SettingsShortcutButton(isFocused: Boolean, onClick: () -> Unit) {
             .size(48.dp)
             .clip(shape)
             .background(backgroundColor)
-            .border(1.dp, if (isFocused) colors.accentPrimary.copy(alpha = 0.5f) else Color(0x1AFFFFFF), shape)
+            .border(1.dp, if (isFocused) colors.accentPrimary.copy(alpha = 0.5f) else colors.rimGloss, shape)
             .clickable(onClick = onClick, interactionSource = interactionSource, indication = null),
         contentAlignment = Alignment.Center
     ) {
@@ -1553,7 +1564,7 @@ private fun ActionPill(text: String, onClick: () -> Unit, primary: Boolean = fal
         modifier = Modifier.clickable(onClick = onClick),
         shape = CircleShape,
         color = if (primary) colors.accentPrimary else colors.surfaceCard.copy(alpha = 0.4f),
-        border = if (primary) null else BorderStroke(1.dp, Color(0x1AFFFFFF))
+        border = if (primary) null else BorderStroke(1.dp, colors.rimGloss)
     ) {
         Text(
             text = text,

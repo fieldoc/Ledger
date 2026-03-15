@@ -202,14 +202,21 @@ fun CalendarScreen(
                     }
                 }
 
-                // WEEK mode: encoder navigates days; Enter drills to DAY
+                // WEEK mode: encoder navigates days; Enter drills to DAY; UP past start drills back to MONTH
                 if (calendarViewMode == CalendarViewMode.WEEK) {
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionRight, Key.DirectionDown -> {
                             onSelectDate(selectedDate.plusDays(1)); true
                         }
                         Key.DirectionLeft, Key.DirectionUp -> {
-                            onSelectDate(selectedDate.minusDays(1)); true
+                            // If at the start of the week, drill back to MONTH
+                            val weekStartDate = selectedDate.with(DayOfWeek.MONDAY)
+                            if (selectedDate <= weekStartDate) {
+                                onViewModeChange(CalendarViewMode.MONTH)
+                            } else {
+                                onSelectDate(selectedDate.minusDays(1))
+                            }
+                            true
                         }
                         Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
                             onDaySelectedFromGrid(selectedDate)
@@ -226,12 +233,20 @@ fun CalendarScreen(
                         Key.DirectionRight, Key.DirectionDown -> {
                             if (threeDaySlotIndex < threeDaySlotCount - 1) {
                                 threeDaySlotIndex += 1
+                            } else if (threeDaySelectedColumn < 2) {
+                                // At bottom of current column, move to next column
+                                threeDaySelectedColumn += 1
+                                threeDaySlotIndex = 0
                             }
                             true
                         }
                         Key.DirectionLeft, Key.DirectionUp -> {
                             if (threeDaySlotIndex > 0) {
                                 threeDaySlotIndex -= 1
+                            } else if (threeDaySelectedColumn > 0) {
+                                // At top of current column, move to previous column
+                                threeDaySelectedColumn -= 1
+                                threeDaySlotIndex = (threeDaySlotCount - 1).coerceAtLeast(0)
                             }
                             true
                         }
@@ -322,12 +337,6 @@ fun CalendarScreen(
                             eventActionFocus = 0
                             return@onKeyEvent true
                         }
-                        Key.Escape -> {
-                            showEventAction = false
-                            eventActionTarget = null
-                            eventActionFocus = 0
-                            return@onKeyEvent true
-                        }
                         else -> {
                             showEventAction = false
                             eventActionTarget = null
@@ -384,6 +393,8 @@ fun CalendarScreen(
                 when (keyEvent.key) {
                     Key.DirectionUp, Key.DirectionRight -> {
                         if (isViewSwitcherFocused) {
+                            // At the very top — drill back to WEEK
+                            onViewModeChange(CalendarViewMode.WEEK)
                             true
                         } else if (isDateBarFocused) {
                             if (isEditingDate) {
@@ -434,7 +445,18 @@ fun CalendarScreen(
                             onSwitchPage(0)
                             true
                         } else if (isDateBarFocused) {
-                            isEditingDate = !isEditingDate
+                            if (isEditingDate) {
+                                // While editing, Enter cycles through available calendars
+                                val writableCalendars = calendars.filter { it.isWritable }
+                                val nextCalendar = writableCalendars.firstOrNull { it.id != selectedCalendarId }
+                                if (nextCalendar != null) {
+                                    onSelectCalendar(nextCalendar.id)
+                                } else {
+                                    isEditingDate = false
+                                }
+                            } else {
+                                isEditingDate = true
+                            }
                             true
                         } else {
                             val slot = slots.getOrNull(selectedSlotIndex)

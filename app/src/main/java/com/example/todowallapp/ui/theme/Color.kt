@@ -28,22 +28,14 @@ val UrgencyDueSoon = Color(0xFFB8A88A)          // Very subtle warmth for due-so
 val UrgencyOverdueSubtle = Color(0xFF3D2E24)    // Dark warm background for overdue badges
 
 // STATES - Minimal, using only accent color variations
-val StateCompleted = AccentPrimary.copy(alpha = 0.4f)  // Muted for completed
-val StateUrgent = UrgencyOverdue                        // Use warm amber instead of blue
 val StateSubtle = AccentPrimary.copy(alpha = 0.15f)    // Very subtle backgrounds
 
 // STRUCTURE - Neutral borders for Soft Graphite
 val BorderColor = Color(0xFF2A2A2A)           // Card border — raised from 1E to 2A for visible edges
 val DividerColor = Color(0xFF1A1A1A)          // Subtle divider
 
-// LEGACY COMPATIBILITY (using AccentPrimary variations instead of separate colors)
-val Primary = AccentPrimary                   // Alias for compatibility
-val AccentSuccess = AccentPrimary.copy(alpha = 0.6f)  // Success state using accent (was green)
-val AccentError = UrgencyOverdue                        // Error/urgency uses warm amber now
-
 // CONNECTIVITY
 val ConnectivityOnline = AccentPrimary.copy(alpha = 0.6f)  // Teal online indicator
-val ConnectivityOffline = AccentWarm                         // Rose offline indicator
 
 // LIGHT MODE SURFACES - Warm linen (neutral, not blue)
 val LightSurfaceBackground = Color(0xFFFAFAF8)
@@ -71,7 +63,6 @@ val LightUrgencyDueSoon = Color(0xFF9A8B6B)
 val LightUrgencyOverdueSubtle = Color(0xFFFAEAE5)
 
 // LIGHT MODE STATES
-val LightStateCompleted = LightAccentPrimary.copy(alpha = 0.35f)
 val LightStateSubtle = LightAccentPrimary.copy(alpha = 0.12f)
 
 // LIGHT MODE STRUCTURE
@@ -80,4 +71,3 @@ val LightDividerColor = Color(0xFFDDD9D3)
 
 // LIGHT MODE CONNECTIVITY
 val LightConnectivityOnline = LightAccentPrimary.copy(alpha = 0.6f)
-val LightConnectivityOffline = LightUrgencyOverdue

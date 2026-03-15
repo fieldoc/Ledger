@@ -437,7 +437,7 @@ private fun SettingsTile(
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = null,
+                contentDescription = label,
                 tint = colors.accentPrimary,
                 modifier = Modifier.size(24.dp)
             )
@@ -510,7 +510,7 @@ private fun ActionRowItem(
     ) {
         Icon(
             imageVector = icon,
-            contentDescription = null,
+            contentDescription = text,
             tint = tint.copy(alpha = 0.8f),
             modifier = Modifier.size(22.dp)
         )

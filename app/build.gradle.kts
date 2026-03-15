@@ -49,7 +49,7 @@ android {
 }
 
 dependencies {
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     // Core Android
     implementation(libs.androidx.core.ktx)
@@ -62,34 +62,34 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.compose.ui:ui-text-google-fonts:1.6.0")
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.androidx.compose.ui.text.google.fonts)
 
     // ViewModel for Compose
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
 
     // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     // Google Sign-In
-    implementation("com.google.android.gms:play-services-auth:21.0.0")
+    implementation(libs.play.services.auth)
 
     // Google API Client
-    implementation("com.google.api-client:google-api-client-android:2.2.0") {
+    implementation(libs.google.api.client.android) {
         exclude(group = "org.apache.httpcomponents")
     }
-    implementation("com.google.apis:google-api-services-tasks:v1-rev20240312-2.0.0") {
+    implementation(libs.google.api.services.tasks) {
         exclude(group = "org.apache.httpcomponents")
     }
-    implementation("com.google.apis:google-api-services-calendar:v3-rev20250115-2.0.0") {
+    implementation(libs.google.api.services.calendar) {
         exclude(group = "org.apache.httpcomponents")
     }
 
     // DataStore for preferences
-    implementation("androidx.datastore:datastore-preferences:1.0.0")
-    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.play.services.mlkit.document.scanner)
     implementation(libs.google.generativeai)
     implementation(libs.androidx.security.crypto)

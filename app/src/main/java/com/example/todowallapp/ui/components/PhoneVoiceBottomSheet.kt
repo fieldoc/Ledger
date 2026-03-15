@@ -326,7 +326,7 @@ private fun ListeningPulse() {
         ) {
             Icon(
                 imageVector = Icons.Outlined.Mic,
-                contentDescription = null,
+                contentDescription = "Microphone active",
                 tint = colors.surfaceBlack,
                 modifier = Modifier.size(32.dp)
             )

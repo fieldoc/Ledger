@@ -1,5 +1,10 @@
 package com.example.todowallapp.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,10 +20,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +34,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.sortTasksForDisplay
@@ -65,6 +73,8 @@ fun PhoneHomeScreen(
     onSettingsClick: () -> Unit,
     onSaveCaptureForRetry: () -> Unit,
     onDismissMessage: () -> Unit,
+    onDeleteTask: ((Task) -> Unit)? = null,
+    onUndoCompletion: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var localExpandedListIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
@@ -75,6 +85,7 @@ fun PhoneHomeScreen(
     }
     val colors = LocalWallColors.current
     var currentTime by remember { mutableStateOf(LocalDateTime.now()) }
+    var taskToDelete by remember { mutableStateOf<Task?>(null) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -102,7 +113,7 @@ fun PhoneHomeScreen(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (uiState.isLoading || uiState.isParsingCapture) {
+                if (uiState.isLoading || uiState.isParsingCapture || uiState.isSyncing) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         color = colors.accentPrimary,
@@ -291,6 +302,22 @@ fun PhoneHomeScreen(
                     }
                 }
 
+                if (uiState.taskLists.isEmpty() && !uiState.isLoading) {
+                    item {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 64.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "No tasks yet.\nTap the mic to capture something.",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = LocalWallColors.current.textSecondary,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+
                 uiState.taskLists.forEachIndexed { index, listWithTasks ->
                     item(key = "accordion_${listWithTasks.taskList.id}") {
                         val groups = remember(listWithTasks.tasks) {
@@ -328,7 +355,10 @@ fun PhoneHomeScreen(
                                         task = group.parent,
                                         onTaskToggle = onTaskToggle,
                                         children = group.children,
-                                        onToggleChildComplete = onTaskToggle
+                                        onToggleChildComplete = onTaskToggle,
+                                        onLongClick = if (onDeleteTask != null) {
+                                            { taskToDelete = group.parent }
+                                        } else null
                                     )
                                 }
 
@@ -344,7 +374,10 @@ fun PhoneHomeScreen(
                                             task = group.parent,
                                             onTaskToggle = onTaskToggle,
                                             children = group.children,
-                                            onToggleChildComplete = onTaskToggle
+                                            onToggleChildComplete = onTaskToggle,
+                                            onLongClick = if (onDeleteTask != null) {
+                                                { taskToDelete = group.parent }
+                                            } else null
                                         )
                                     }
                                 }
@@ -360,6 +393,65 @@ fun PhoneHomeScreen(
             onVoiceClick = onVoiceClick,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+        )
+
+        // Undo banner
+        AnimatedVisibility(
+            visible = uiState.undoTask != null && onUndoCompletion != null,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 100.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = colors.surfaceCard,
+                border = androidx.compose.foundation.BorderStroke(1.dp, colors.borderColor.copy(alpha = 0.3f)),
+                modifier = Modifier.padding(horizontal = 24.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Task completed",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.textPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = "Undo",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.accentPrimary,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable { onUndoCompletion?.invoke() }
+                    )
+                }
+            }
+        }
+    }
+
+    // Delete confirmation dialog
+    taskToDelete?.let { task ->
+        AlertDialog(
+            onDismissRequest = { taskToDelete = null },
+            title = { Text("Delete task?") },
+            text = { Text("\"${task.title}\" will be permanently deleted.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteTask?.invoke(task)
+                    taskToDelete = null
+                }) {
+                    Text("Delete", color = colors.urgencyOverdue)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { taskToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }

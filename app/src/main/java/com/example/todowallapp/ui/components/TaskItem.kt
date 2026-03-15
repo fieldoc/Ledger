@@ -1,6 +1,7 @@
 package com.example.todowallapp.ui.components
 
 import com.example.todowallapp.ui.theme.LocalWallColors
+import com.example.todowallapp.ui.theme.urgencyColor
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
@@ -177,12 +178,10 @@ private fun TaskItemContent(
     val cardShape = RoundedCornerShape(WallShapes.CardCornerRadius.dp)
     val showUrgencyAccent = !task.isCompleted && urgency != TaskUrgency.NORMAL && !isAmbientMode
     val taskColors = LocalWallColors.current
-    val urgencyAccentColor = when (urgency) {
-        TaskUrgency.COMPLETED -> Color.Transparent
-        TaskUrgency.OVERDUE -> taskColors.urgencyOverdue
-        TaskUrgency.DUE_TODAY -> taskColors.urgencyDueToday
-        TaskUrgency.DUE_SOON -> taskColors.urgencyDueSoon
-        TaskUrgency.NORMAL -> Color.Transparent
+    val urgencyAccentColor = if (urgency == TaskUrgency.COMPLETED || urgency == TaskUrgency.NORMAL) {
+        Color.Transparent
+    } else {
+        taskColors.urgencyColor(urgency)
     }
 
     val contentAlpha = if (isAmbientMode) ambientContentAlpha else completionContentAlpha

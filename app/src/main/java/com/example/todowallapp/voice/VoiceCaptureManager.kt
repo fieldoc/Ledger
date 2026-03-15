@@ -39,6 +39,17 @@ class VoiceCaptureManager(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private companion object {
+        const val LISTENING_TIMEOUT_MS = 30_000L
+    }
+
+    private val timeoutRunnable = Runnable {
+        speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+        _state.value = VoiceInputState.Error("Listening timed out")
+    }
+
     fun startListening() {
         if (_state.value is VoiceInputState.Listening || _state.value is VoiceInputState.Processing) {
             return
@@ -94,6 +105,7 @@ class VoiceCaptureManager(private val context: Context) {
                 }
 
                 override fun onError(error: Int) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
                     val message = when (error) {
                         SpeechRecognizer.ERROR_NO_MATCH -> "Didn't catch that"
                         SpeechRecognizer.ERROR_NETWORK -> "Network error (code 2)"
@@ -111,6 +123,7 @@ class VoiceCaptureManager(private val context: Context) {
                 }
 
                 override fun onResults(results: Bundle?) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = matches
                         ?.firstOrNull()
@@ -146,6 +159,7 @@ class VoiceCaptureManager(private val context: Context) {
             })
 
             speechRecognizer?.startListening(intent)
+            mainHandler.postDelayed(timeoutRunnable, LISTENING_TIMEOUT_MS)
         }
     }
 
@@ -154,6 +168,7 @@ class VoiceCaptureManager(private val context: Context) {
     }
 
     fun cancel() {
+        mainHandler.removeCallbacks(timeoutRunnable)
         speechRecognizer?.cancel()
         _state.value = VoiceInputState.Idle
     }
@@ -181,6 +196,7 @@ class VoiceCaptureManager(private val context: Context) {
     }
 
     fun destroy() {
+        mainHandler.removeCallbacks(timeoutRunnable)
         speechRecognizer?.destroy()
         speechRecognizer = null
     }

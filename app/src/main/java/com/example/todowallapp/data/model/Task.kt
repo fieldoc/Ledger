@@ -78,16 +78,6 @@ data class TaskList(
 )
 
 /**
- * App display state
- */
-data class DisplayState(
-    val isAmbientMode: Boolean = false,
-    val brightness: Float = 1.0f,
-    val selectedTaskIndex: Int = 0,
-    val lastInteractionTime: LocalDateTime = LocalDateTime.now()
-)
-
-/**
  * Mock data for development and preview
  */
 object MockData {

@@ -184,7 +184,7 @@ private fun HeaderBentoTile(
             .then(
                 if (isAmbientMode) Modifier else Modifier
                     .background(containerColor ?: colors.surfaceCard.copy(alpha = 0.4f))
-                    .border(1.dp, Color(0x1AFFFFFF), shape)
+                    .border(1.dp, colors.rimGloss, shape)
             )
             .padding(horizontal = 20.dp, vertical = 12.dp)
     ) {

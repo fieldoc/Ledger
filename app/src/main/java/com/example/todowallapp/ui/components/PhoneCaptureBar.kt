@@ -76,7 +76,7 @@ fun PhoneCaptureHub(
             modifier = Modifier
                 .matchParentSize()
                 .padding(1.dp)
-                .border(1.dp, Color(0x1AFFFFFF), RoundedCornerShape(34.dp))
+                .border(1.dp, colors.rimGloss, RoundedCornerShape(34.dp))
         )
 
         Row(

@@ -2,6 +2,7 @@ package com.example.todowallapp.ui.theme
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import com.example.todowallapp.data.model.TaskUrgency
 
 data class WallColors(
     val surfaceBackground: Color,
@@ -21,15 +22,13 @@ data class WallColors(
     val urgencyDueToday: Color,
     val urgencyDueSoon: Color,
     val urgencyOverdueSubtle: Color,
-    val stateCompleted: Color,
-    val stateSubtle: Color,
     val borderColor: Color,
     val dividerColor: Color,
     val connectivityOnline: Color,
-    val connectivityOffline: Color,
-    val accentDeep: Color,
     val textFaint: Color,
     val borderFocused: Color,
+    val rimGloss: Color,
+    val rimGlossStrong: Color,
     val isDark: Boolean
 )
 
@@ -51,15 +50,13 @@ fun darkWallColors(): WallColors = WallColors(
     urgencyDueToday = UrgencyDueToday,
     urgencyDueSoon = UrgencyDueSoon,
     urgencyOverdueSubtle = UrgencyOverdueSubtle,
-    stateCompleted = StateCompleted,
-    stateSubtle = StateSubtle,
     borderColor = BorderColor,
     dividerColor = DividerColor,
     connectivityOnline = ConnectivityOnline,
-    connectivityOffline = ConnectivityOffline,
-    accentDeep = Color(0xFF4DB6AC),
     textFaint = Color(0xFF333333),
     borderFocused = Color(0x3380CBC4),  // rgba(128,203,196,0.2)
+    rimGloss = Color(0x1AFFFFFF),
+    rimGlossStrong = Color(0x26FFFFFF),
     isDark = true
 )
 
@@ -81,17 +78,23 @@ fun lightWallColors(): WallColors = WallColors(
     urgencyDueToday = LightUrgencyDueToday,
     urgencyDueSoon = LightUrgencyDueSoon,
     urgencyOverdueSubtle = LightUrgencyOverdueSubtle,
-    stateCompleted = LightStateCompleted,
-    stateSubtle = LightStateSubtle,
     borderColor = LightBorderColor,
     dividerColor = LightDividerColor,
     connectivityOnline = LightConnectivityOnline,
-    connectivityOffline = LightConnectivityOffline,
-    accentDeep = Color(0xFF00796B),
     textFaint = Color(0xFFCCCCCC),
     borderFocused = Color(0x3300897B),
+    rimGloss = Color(0x1A000000),
+    rimGlossStrong = Color(0x26000000),
     isDark = false
 )
+
+fun WallColors.urgencyColor(urgency: TaskUrgency): Color = when (urgency) {
+    TaskUrgency.OVERDUE -> urgencyOverdue
+    TaskUrgency.DUE_TODAY -> urgencyDueToday
+    TaskUrgency.DUE_SOON -> urgencyDueSoon
+    TaskUrgency.NORMAL -> textSecondary
+    TaskUrgency.COMPLETED -> textSecondary.copy(alpha = 0.5f)
+}
 
 val LocalWallColors = staticCompositionLocalOf<WallColors> {
     error("No WallColors provided")

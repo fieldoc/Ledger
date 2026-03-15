@@ -87,24 +87,10 @@ class GoogleAuthManager(private val context: Context) {
     }
 
     /**
-     * Whether the account currently has Google Tasks scope.
-     */
-    fun hasTasksScope(account: GoogleSignInAccount? = getCurrentAccount()): Boolean {
-        return account != null && GoogleSignIn.hasPermissions(account, tasksScope)
-    }
-
-    /**
      * Whether the account currently has Calendar Events scope.
      */
     fun hasCalendarScope(account: GoogleSignInAccount? = getCurrentAccount()): Boolean {
         return account != null && GoogleSignIn.hasPermissions(account, calendarEventsScope)
-    }
-
-    /**
-     * Whether an already authenticated user should be prompted for optional calendar re-consent.
-     */
-    fun shouldRequestCalendarReconsent(account: GoogleSignInAccount? = getCurrentAccount()): Boolean {
-        return account != null && !hasCalendarScope(account)
     }
 
     /**
@@ -143,12 +129,6 @@ class GoogleAuthManager(private val context: Context) {
         googleSignInClient.signOut().await()
     }
 
-    /**
-     * Revoke access (for complete disconnect)
-     */
-    suspend fun revokeAccess() = withContext(Dispatchers.IO) {
-        googleSignInClient.revokeAccess().await()
-    }
 }
 
 /**
