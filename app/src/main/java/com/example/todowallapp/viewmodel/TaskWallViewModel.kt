@@ -145,6 +145,16 @@ class TaskWallViewModel(
     private val _lightEndHour = MutableStateFlow(19)
     val lightEndHour: StateFlow<Int> = _lightEndHour.asStateFlow()
 
+    // Gemini key state (for wall-mode settings)
+    private val _geminiKeyPresent = MutableStateFlow(geminiKeyStore.hasApiKey())
+    val geminiKeyPresent: StateFlow<Boolean> = _geminiKeyPresent.asStateFlow()
+
+    private val _isValidatingGeminiKey = MutableStateFlow(false)
+    val isValidatingGeminiKey: StateFlow<Boolean> = _isValidatingGeminiKey.asStateFlow()
+
+    private val _geminiKeyError = MutableStateFlow<String?>(null)
+    val geminiKeyError: StateFlow<String?> = _geminiKeyError.asStateFlow()
+
     // Weather forecast
     private val _weatherForecast = MutableStateFlow<Map<LocalDate, WeatherCondition>>(emptyMap())
     val weatherForecast: StateFlow<Map<LocalDate, WeatherCondition>> = _weatherForecast.asStateFlow()
@@ -1438,6 +1448,39 @@ class TaskWallViewModel(
                 }
             }
             .map { it.listWithTasks }
+    }
+
+    // ── Gemini key management (for wall-mode settings) ──
+
+    fun validateAndSaveGeminiKey(rawKey: String) {
+        val key = rawKey.trim()
+        if (key.isBlank()) {
+            _geminiKeyError.value = "Gemini key cannot be blank"
+            return
+        }
+        viewModelScope.launch {
+            _isValidatingGeminiKey.value = true
+            _geminiKeyError.value = null
+            geminiCaptureRepository.validateApiKey(key).fold(
+                onSuccess = {
+                    geminiKeyStore.setApiKey(key)
+                    _isValidatingGeminiKey.value = false
+                    _geminiKeyPresent.value = true
+                    _geminiKeyError.value = null
+                },
+                onFailure = { error ->
+                    _isValidatingGeminiKey.value = false
+                    _geminiKeyPresent.value = geminiKeyStore.hasApiKey()
+                    _geminiKeyError.value = "Validation failed: ${error.message ?: error.javaClass.simpleName}"
+                }
+            )
+        }
+    }
+
+    fun clearGeminiKey() {
+        geminiKeyStore.clearApiKey()
+        _geminiKeyPresent.value = false
+        _geminiKeyError.value = null
     }
 
     /**

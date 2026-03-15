@@ -15,9 +15,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -25,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +56,7 @@ import com.example.todowallapp.ui.theme.WallAnimations
 import com.example.todowallapp.ui.theme.WallShapes
 import com.example.todowallapp.viewmodel.ThemeMode
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 private val SYNC_INTERVAL_OPTIONS = listOf(1, 2, 5, 10, 15, 30)
@@ -60,6 +66,8 @@ private enum class SettingsItemType {
     LIGHT_HOURS,
     SLEEP_SCHEDULE,
     SYNC_INTERVAL,
+    GEMINI_KEY,
+    WEATHER,
     SWITCH_MODE,
     SIGN_OUT
 }
@@ -75,6 +83,17 @@ fun SettingsPanel(
     onThemeSettingsChange: (mode: ThemeMode, lightStart: Int, lightEnd: Int) -> Unit,
     onSleepScheduleChange: (startHour: Int, endHour: Int) -> Unit,
     onSyncIntervalChange: (minutes: Int) -> Unit,
+    geminiKeyPresent: Boolean = false,
+    isValidatingGeminiKey: Boolean = false,
+    geminiKeyError: String? = null,
+    onSaveGeminiKey: (String) -> Unit = {},
+    onClearGeminiKey: () -> Unit = {},
+    weatherLocation: String = "",
+    weatherApiKeyPresent: Boolean = false,
+    onSaveWeatherLocation: (String) -> Unit = {},
+    onSaveWeatherApiKey: (String) -> Unit = {},
+    onClearWeatherApiKey: () -> Unit = {},
+    onSearchCities: (suspend (String) -> List<String>) = { emptyList() },
     onSwitchMode: () -> Unit,
     onSignOut: () -> Unit,
     onDismiss: () -> Unit,
@@ -89,6 +108,8 @@ fun SettingsPanel(
             }
             add(SettingsItemType.SLEEP_SCHEDULE)
             add(SettingsItemType.SYNC_INTERVAL)
+            add(SettingsItemType.GEMINI_KEY)
+            add(SettingsItemType.WEATHER)
             add(SettingsItemType.SWITCH_MODE)
             add(SettingsItemType.SIGN_OUT)
         }
@@ -142,6 +163,8 @@ fun SettingsPanel(
             if (isEditingValue) "Sleep schedule selected, editing $activeField" else "Sleep schedule selected"
         }
         SettingsItemType.SYNC_INTERVAL -> "Sync interval selected"
+        SettingsItemType.GEMINI_KEY -> "Gemini API key selected"
+        SettingsItemType.WEATHER -> "Weather settings selected"
         SettingsItemType.SWITCH_MODE -> "Switch mode selected"
         SettingsItemType.SIGN_OUT -> "Sign out selected"
     }
@@ -279,6 +302,8 @@ fun SettingsPanel(
                             }
 
                             SettingsItemType.SYNC_INTERVAL -> adjustSyncInterval(forward = true)
+                            SettingsItemType.GEMINI_KEY -> { /* touch-only: text field + buttons */ }
+                            SettingsItemType.WEATHER -> { /* touch-only: text fields + buttons */ }
                             SettingsItemType.SWITCH_MODE -> triggerSwitchMode()
                             SettingsItemType.SIGN_OUT -> triggerSignOut()
                         }
@@ -293,6 +318,8 @@ fun SettingsPanel(
     ) {
         val cardShape = RoundedCornerShape(WallShapes.CardCornerRadius.dp)
 
+        val scrollState = rememberScrollState()
+
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.7f)
@@ -306,6 +333,7 @@ fun SettingsPanel(
                 }
                 .clickable(enabled = false, onClick = {})
                 .padding(horizontal = 28.dp, vertical = 24.dp)
+                .verticalScroll(scrollState)
         ) {
             Text(
                 text = "Settings",
@@ -421,6 +449,38 @@ fun SettingsPanel(
             ) {
                 SettingsValuePill(text = "$syncIntervalMinutes min")
             }
+
+            SettingsDivider()
+
+            SettingsSectionHeader("INTELLIGENCE")
+
+            // Gemini API Key
+            SettingsApiKeyItem(
+                label = "Gemini API Key",
+                description = "Powers voice input parsing",
+                isSelected = focusedItem == SettingsItemType.GEMINI_KEY,
+                keyPresent = geminiKeyPresent,
+                isValidating = isValidatingGeminiKey,
+                error = geminiKeyError,
+                placeholder = if (geminiKeyPresent) "Key is active" else "Paste Gemini API key",
+                onSave = onSaveGeminiKey,
+                onClear = onClearGeminiKey
+            )
+
+            SettingsDivider()
+
+            SettingsSectionHeader("WEATHER")
+
+            // Weather settings
+            SettingsWeatherItem(
+                isSelected = focusedItem == SettingsItemType.WEATHER,
+                weatherLocation = weatherLocation,
+                weatherApiKeyPresent = weatherApiKeyPresent,
+                onSaveLocation = onSaveWeatherLocation,
+                onSaveApiKey = onSaveWeatherApiKey,
+                onClearApiKey = onClearWeatherApiKey,
+                onSearchCities = onSearchCities
+            )
 
             SettingsDivider()
 
@@ -577,6 +637,324 @@ private fun SettingsValuePill(text: String) {
         modifier = Modifier
             .background(colors.accentPrimary.copy(alpha = 0.06f), RoundedCornerShape(6.dp))
             .padding(horizontal = 8.dp, vertical = 3.dp)
+    )
+}
+
+@Composable
+private fun SettingsApiKeyItem(
+    label: String,
+    description: String,
+    isSelected: Boolean,
+    keyPresent: Boolean,
+    isValidating: Boolean,
+    error: String?,
+    placeholder: String,
+    onSave: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    val colors = LocalWallColors.current
+    val alpha by animateFloatAsState(
+        targetValue = if (isSelected) 1f else 0.7f,
+        animationSpec = tween(durationMillis = WallAnimations.SHORT),
+        label = "apiKeyItemAlpha"
+    )
+    var keyInput by remember { mutableStateOf("") }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = (if (isSelected) colors.textPrimary else colors.textSecondary).copy(alpha = alpha)
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = colors.textDisabled,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            SettingsValuePill(text = if (keyPresent) "Active" else "Not set")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = keyInput,
+            onValueChange = { keyInput = it },
+            placeholder = {
+                Text(placeholder, color = colors.textMuted, style = MaterialTheme.typography.bodySmall)
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodySmall.copy(color = colors.textPrimary),
+            shape = RoundedCornerShape(8.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = colors.textPrimary,
+                unfocusedTextColor = colors.textPrimary,
+                focusedBorderColor = colors.accentPrimary,
+                unfocusedBorderColor = colors.borderColor,
+                cursorColor = colors.accentPrimary
+            )
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SettingsActionButton(
+                text = if (isValidating) "Checking..." else "Save",
+                enabled = !isValidating && keyInput.isNotBlank(),
+                onClick = { onSave(keyInput) }
+            )
+            if (keyPresent) {
+                SettingsActionButton(
+                    text = "Remove",
+                    enabled = true,
+                    onClick = onClear,
+                    isDestructive = true
+                )
+            }
+        }
+
+        if (!error.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = error,
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.urgencyOverdue
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsWeatherItem(
+    isSelected: Boolean,
+    weatherLocation: String,
+    weatherApiKeyPresent: Boolean,
+    onSaveLocation: (String) -> Unit,
+    onSaveApiKey: (String) -> Unit,
+    onClearApiKey: () -> Unit,
+    onSearchCities: (suspend (String) -> List<String>)
+) {
+    val colors = LocalWallColors.current
+    val alpha by animateFloatAsState(
+        targetValue = if (isSelected) 1f else 0.7f,
+        animationSpec = tween(durationMillis = WallAnimations.SHORT),
+        label = "weatherItemAlpha"
+    )
+    var locationInput by remember(weatherLocation) { mutableStateOf(weatherLocation) }
+    var weatherKeyInput by remember { mutableStateOf("") }
+    var locationSaved by remember { mutableStateOf(false) }
+    var keySaved by remember { mutableStateOf(false) }
+    var citySuggestions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showSuggestions by remember { mutableStateOf(false) }
+    val searchScope = rememberCoroutineScope()
+    var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    LaunchedEffect(locationSaved) {
+        if (locationSaved) { delay(2000); locationSaved = false }
+    }
+    LaunchedEffect(keySaved) {
+        if (keySaved) { delay(2000); keySaved = false }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Weather Tints",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = (if (isSelected) colors.textPrimary else colors.textSecondary).copy(alpha = alpha)
+                )
+                Text(
+                    text = "Subtle weather-based tints on calendar",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = colors.textDisabled,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            SettingsValuePill(
+                text = if (weatherApiKeyPresent && weatherLocation.isNotBlank()) "Active" else "Not set"
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Location field
+        Box {
+            OutlinedTextField(
+                value = locationInput,
+                onValueChange = { input ->
+                    locationInput = input
+                    locationSaved = false
+                    if (weatherApiKeyPresent && input.length >= 2) {
+                        searchJob?.cancel()
+                        searchJob = searchScope.launch {
+                            delay(300)
+                            val results = onSearchCities(input)
+                            citySuggestions = results
+                            showSuggestions = results.isNotEmpty()
+                        }
+                    } else {
+                        citySuggestions = emptyList()
+                        showSuggestions = false
+                    }
+                },
+                placeholder = {
+                    Text("City, Country (e.g. London, UK)", color = colors.textMuted, style = MaterialTheme.typography.bodySmall)
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = colors.textPrimary),
+                shape = RoundedCornerShape(8.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = colors.textPrimary,
+                    unfocusedTextColor = colors.textPrimary,
+                    focusedBorderColor = colors.accentPrimary,
+                    unfocusedBorderColor = colors.borderColor,
+                    cursorColor = colors.accentPrimary
+                )
+            )
+
+            // City suggestions dropdown
+            androidx.compose.material3.DropdownMenu(
+                expanded = showSuggestions && citySuggestions.isNotEmpty(),
+                onDismissRequest = { showSuggestions = false },
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .background(colors.surfaceElevated)
+            ) {
+                citySuggestions.forEach { suggestion ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = suggestion,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textPrimary
+                            )
+                        },
+                        onClick = {
+                            locationInput = suggestion
+                            showSuggestions = false
+                            locationSaved = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        SettingsActionButton(
+            text = if (locationSaved) "Saved!" else "Save Location",
+            enabled = locationInput.isNotBlank() && !locationSaved,
+            onClick = {
+                onSaveLocation(locationInput)
+                locationSaved = true
+            }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Weather API key field
+        OutlinedTextField(
+            value = weatherKeyInput,
+            onValueChange = { weatherKeyInput = it; keySaved = false },
+            placeholder = {
+                Text(
+                    if (weatherApiKeyPresent) "Key is active" else "OpenWeatherMap API Key",
+                    color = colors.textMuted,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodySmall.copy(color = colors.textPrimary),
+            shape = RoundedCornerShape(8.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = colors.textPrimary,
+                unfocusedTextColor = colors.textPrimary,
+                focusedBorderColor = colors.accentPrimary,
+                unfocusedBorderColor = colors.borderColor,
+                cursorColor = colors.accentPrimary
+            )
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SettingsActionButton(
+                text = if (keySaved) "Saved!" else "Save Key",
+                enabled = weatherKeyInput.isNotBlank() && !keySaved,
+                onClick = {
+                    onSaveApiKey(weatherKeyInput)
+                    keySaved = true
+                }
+            )
+            if (weatherApiKeyPresent) {
+                SettingsActionButton(
+                    text = "Remove",
+                    enabled = true,
+                    onClick = onClearApiKey,
+                    isDestructive = true
+                )
+            }
+        }
+
+        Text(
+            text = "Free key at openweathermap.org/api",
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+            color = colors.textDisabled,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun SettingsActionButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    isDestructive: Boolean = false
+) {
+    val colors = LocalWallColors.current
+    val bgColor = when {
+        !enabled -> colors.borderColor.copy(alpha = 0.3f)
+        isDestructive -> colors.urgencyOverdue.copy(alpha = 0.15f)
+        else -> colors.accentPrimary.copy(alpha = 0.12f)
+    }
+    val textColor = when {
+        !enabled -> colors.textDisabled
+        isDestructive -> colors.urgencyOverdue
+        else -> colors.accentPrimary
+    }
+
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = textColor,
+        modifier = Modifier
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .background(bgColor, RoundedCornerShape(6.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     )
 }
 

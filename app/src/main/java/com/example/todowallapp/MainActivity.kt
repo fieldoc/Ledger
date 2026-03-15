@@ -302,6 +302,8 @@ fun TaskWallApp(
                     AppMode.WALL -> WallModeContent(
                         viewModel = wallViewModel,
                         voiceState = wallVoiceState,
+                        weatherKeyStore = weatherKeyStore,
+                        weatherRepository = weatherRepository,
                         onSwitchMode = { scope.launch { modeRepository.setModePreference(null) } },
                         onRequestCalendarAccess = {
                             isSigningIn = true
@@ -366,6 +368,8 @@ fun TaskWallApp(
 private fun WallModeContent(
     viewModel: TaskWallViewModel,
     voiceState: VoiceInputState,
+    weatherKeyStore: WeatherKeyStore,
+    weatherRepository: WeatherRepository,
     onSwitchMode: () -> Unit,
     onRequestCalendarAccess: () -> Unit,
     onSetBrightness: (Float) -> Unit = {}
@@ -381,6 +385,9 @@ private fun WallModeContent(
     val sleepEndHour by viewModel.sleepEndHour.collectAsState()
     val weatherForecast by viewModel.weatherForecast.collectAsState()
     val syncIntervalMinutes by viewModel.syncIntervalMinutes.collectAsState()
+    val geminiKeyPresent by viewModel.geminiKeyPresent.collectAsState()
+    val isValidatingGeminiKey by viewModel.isValidatingGeminiKey.collectAsState()
+    val geminiKeyError by viewModel.geminiKeyError.collectAsState()
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val scope = rememberCoroutineScope()
@@ -487,6 +494,27 @@ private fun WallModeContent(
                         },
                         onSleepScheduleChange = viewModel::updateSleepSchedule,
                         onSyncIntervalChange = viewModel::updateSyncInterval,
+                        geminiKeyPresent = geminiKeyPresent,
+                        isValidatingGeminiKey = isValidatingGeminiKey,
+                        geminiKeyError = geminiKeyError,
+                        onSaveGeminiKey = viewModel::validateAndSaveGeminiKey,
+                        onClearGeminiKey = viewModel::clearGeminiKey,
+                        weatherLocation = weatherKeyStore.getLocation() ?: "",
+                        weatherApiKeyPresent = weatherKeyStore.hasApiKey(),
+                        onSaveWeatherLocation = { location ->
+                            weatherKeyStore.setLocation(location)
+                        },
+                        onSaveWeatherApiKey = { key ->
+                            weatherKeyStore.setApiKey(key)
+                        },
+                        onClearWeatherApiKey = {
+                            weatherKeyStore.clearApiKey()
+                        },
+                        onSearchCities = { query ->
+                            weatherRepository.searchCities(query).map { suggestion ->
+                                "${suggestion.name}, ${suggestion.country}"
+                            }
+                        },
                         onSwitchMode = onSwitchMode,
                         onSignOut = viewModel::signOut,
                         onSetBrightness = onSetBrightness,
