@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.todowallapp.auth.AuthState
 import com.example.todowallapp.auth.GoogleAuthManager
+import com.example.todowallapp.capture.VoiceParsingCoordinator
 import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
 import com.example.todowallapp.data.model.CalendarEvent
@@ -173,10 +174,9 @@ class TaskWallViewModel(
     private val isReauthenticating = java.util.concurrent.atomic.AtomicBoolean(false)
     private val signInMutex = Mutex()
     private val inFlightTaskIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-    private var voiceParseJob: Job? = null
-    private var parsedVoiceDueDate: LocalDate? = null
-    private var parsedVoiceTargetListId: String? = null
-    private var parsedVoiceParentTaskId: String? = null
+    private val voiceParsingCoordinator = VoiceParsingCoordinator(
+        voiceCaptureManager, geminiCaptureRepository, geminiKeyStore
+    )
 
     // Last sync success tracking
     private var syncFeedbackJob: Job? = null
@@ -186,7 +186,15 @@ class TaskWallViewModel(
     private val promotionTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
     init {
-        configureVoiceInputParsing()
+        voiceParsingCoordinator.configure(
+            scope = viewModelScope,
+            listProvider = {
+                _uiState.value.taskLists.map { list ->
+                    ExistingListRef(id = list.id, title = list.title)
+                }
+            },
+            listIdValidator = ::resolveKnownTaskListId
+        )
         loadSettings()
         checkAuthState()
         observeConnectivity()
@@ -689,8 +697,8 @@ class TaskWallViewModel(
     }
 
     fun startVoiceInput() {
-        voiceParseJob?.cancel()
-        clearVoiceParsingMetadata()
+        voiceParsingCoordinator.cancelParse()
+        voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.startListening()
     }
 
@@ -699,8 +707,8 @@ class TaskWallViewModel(
     }
 
     fun cancelVoiceInput() {
-        voiceParseJob?.cancel()
-        clearVoiceParsingMetadata()
+        voiceParsingCoordinator.cancelParse()
+        voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.cancel()
     }
 
@@ -710,12 +718,12 @@ class TaskWallViewModel(
             viewModelScope.launch {
                 val taskListId = resolveKnownTaskListId(targetListId)
                     ?: resolveKnownTaskListId(currentState.targetListId)
-                    ?: resolveKnownTaskListId(parsedVoiceTargetListId)
+                    ?: resolveKnownTaskListId(voiceParsingCoordinator.parsedTargetListId)
                     ?: _uiState.value.selectedTaskListId
                     ?: _uiState.value.taskLists.firstOrNull()?.id
                     ?: return@launch
-                val dueDate = currentState.dueDate ?: parsedVoiceDueDate
-                val parentId = parsedVoiceParentTaskId
+                val dueDate = currentState.dueDate ?: voiceParsingCoordinator.parsedDueDate
+                val parentId = voiceParsingCoordinator.parsedParentTaskId
                 val result = tasksRepository.createTask(
                     taskListId = taskListId,
                     title = currentState.transcribedText,
@@ -724,7 +732,7 @@ class TaskWallViewModel(
                 )
                 result.fold(
                     onSuccess = {
-                        clearVoiceParsingMetadata()
+                        voiceParsingCoordinator.clearMetadata()
                         voiceCaptureManager.resetToIdle()
                         refresh()
                     },
@@ -737,66 +745,8 @@ class TaskWallViewModel(
     }
 
     fun dismissVoiceError() {
-        clearVoiceParsingMetadata()
+        voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.resetToIdle()
-    }
-
-    private fun configureVoiceInputParsing() {
-        voiceCaptureManager.rawResultCallback = { rawText ->
-            handleRawVoiceTranscription(rawText)
-        }
-    }
-
-    private fun handleRawVoiceTranscription(rawText: String) {
-        val normalizedText = rawText.trim()
-        if (normalizedText.isEmpty()) {
-            voiceCaptureManager.setError("Didn't catch that")
-            return
-        }
-
-        voiceParseJob?.cancel()
-        voiceParseJob = viewModelScope.launch {
-            val existingLists = _uiState.value.taskLists.map { list ->
-                ExistingListRef(id = list.id, title = list.title)
-            }
-
-            val apiKey = geminiKeyStore.getApiKey()
-            if (apiKey == null) {
-                clearVoiceParsingMetadata()
-                voiceCaptureManager.showPreview(transcribedText = normalizedText)
-                return@launch
-            }
-
-            val parseResult = geminiCaptureRepository.parseVoiceInput(
-                apiKey = apiKey,
-                rawText = normalizedText,
-                existingLists = existingLists,
-                todayDate = LocalDate.now()
-            )
-
-            parseResult.fold(
-                onSuccess = { parsed ->
-                    parsedVoiceDueDate = parsed.dueDate
-                    parsedVoiceTargetListId = resolveKnownTaskListId(parsed.targetListId)
-                    parsedVoiceParentTaskId = parsed.parentTaskId
-                    voiceCaptureManager.showPreview(
-                        transcribedText = parsed.title.ifBlank { normalizedText },
-                        dueDate = parsedVoiceDueDate,
-                        targetListId = parsedVoiceTargetListId
-                    )
-                },
-                onFailure = {
-                    clearVoiceParsingMetadata()
-                    voiceCaptureManager.showPreview(transcribedText = normalizedText)
-                }
-            )
-        }
-    }
-
-    private fun clearVoiceParsingMetadata() {
-        parsedVoiceDueDate = null
-        parsedVoiceTargetListId = null
-        parsedVoiceParentTaskId = null
     }
 
     private fun resolveKnownTaskListId(candidateId: String?): String? {
@@ -1446,7 +1396,7 @@ class TaskWallViewModel(
     override fun onCleared() {
         super.onCleared()
         autoSyncJob?.cancel()
-        voiceParseJob?.cancel()
+        voiceParsingCoordinator.destroy()
         undoTimeoutJob?.cancel()
         syncFeedbackJob?.cancel()
         promotionAnchorExpiryJob?.cancel()

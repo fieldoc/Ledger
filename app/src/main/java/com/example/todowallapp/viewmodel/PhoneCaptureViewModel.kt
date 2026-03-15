@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.todowallapp.capture.VoiceParsingCoordinator
 import com.example.todowallapp.capture.model.CaptureCommitSummary
 import com.example.todowallapp.capture.model.ListTarget
 import com.example.todowallapp.capture.model.ParsedCapture
@@ -77,9 +78,10 @@ class PhoneCaptureViewModel(
 
     private var lastCapturedImageBytes: ByteArray? = null
     private var activePendingCaptureId: String? = null
-    private var voiceParseJob: Job? = null
-    private var parsedVoiceDueDate: LocalDate? = null
-    private var parsedVoiceTargetListId: String? = null
+
+    private val voiceParsingCoordinator = VoiceParsingCoordinator(
+        voiceCaptureManager, geminiRepository, geminiKeyStore
+    )
 
     private data class PhoneUndoState(val task: Task, val taskListId: String)
     private val _undoState = MutableStateFlow<PhoneUndoState?>(null)
@@ -109,7 +111,22 @@ class PhoneCaptureViewModel(
 
     init {
         loadPendingCaptures()
-        configureVoiceInputParsing()
+        voiceParsingCoordinator.configure(
+            scope = viewModelScope,
+            listProvider = {
+                _uiState.value.taskLists.map { listWithTasks ->
+                    ExistingListRef(id = listWithTasks.taskList.id, title = listWithTasks.taskList.title)
+                }
+            },
+            taskProvider = {
+                _uiState.value.taskLists.flatMap { list ->
+                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
+                        ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
+                    }
+                }.take(30)
+            },
+            listIdValidator = ::resolveKnownTaskListId
+        )
     }
 
     fun setSessionReady(isReady: Boolean) {
@@ -269,17 +286,15 @@ class PhoneCaptureViewModel(
         voiceCaptureManager.resetToIdle()
     }
 
-    private var parsedVoiceParentTaskId: String? = null
-
     fun confirmVoiceTask(targetListId: String?) {
         val voicePreview = voiceCaptureManager.state.value as? VoiceInputState.Preview ?: return
         val listId = resolveKnownTaskListId(targetListId)
             ?: resolveKnownTaskListId(voicePreview.targetListId)
-            ?: resolveKnownTaskListId(parsedVoiceTargetListId)
+            ?: resolveKnownTaskListId(voiceParsingCoordinator.parsedTargetListId)
             ?: _uiState.value.taskLists.firstOrNull()?.taskList?.id
             ?: return
-        val dueDate = voicePreview.dueDate ?: parsedVoiceDueDate
-        val parentId = parsedVoiceParentTaskId
+        val dueDate = voicePreview.dueDate ?: voiceParsingCoordinator.parsedDueDate
+        val parentId = voiceParsingCoordinator.parsedParentTaskId
 
         viewModelScope.launch {
             val result = tasksRepository.createTask(
@@ -290,7 +305,7 @@ class PhoneCaptureViewModel(
             )
             result.fold(
                 onSuccess = {
-                    clearVoiceParsingMetadata()
+                    voiceParsingCoordinator.clearMetadata()
                     voiceCaptureManager.resetToIdle()
                     _uiState.value = _uiState.value.copy(showVoiceSheet = false)
                     refreshTaskListsWithIndicator()
@@ -300,79 +315,6 @@ class PhoneCaptureViewModel(
                 }
             )
         }
-    }
-
-    private fun configureVoiceInputParsing() {
-        voiceCaptureManager.rawResultCallback = { rawText ->
-            handleRawVoiceTranscription(rawText)
-        }
-    }
-
-    private fun handleRawVoiceTranscription(rawText: String) {
-        val normalizedText = rawText.trim()
-        if (normalizedText.isEmpty()) {
-            voiceCaptureManager.setError("Didn't catch that")
-            return
-        }
-
-        voiceParseJob?.cancel()
-        voiceParseJob = viewModelScope.launch {
-            val existingLists = _uiState.value.taskLists.map { listWithTasks ->
-                ExistingListRef(id = listWithTasks.taskList.id, title = listWithTasks.taskList.title)
-            }
-            // Provide top-level tasks for hierarchy context
-            val existingTasks = _uiState.value.taskLists.flatMap { list ->
-                list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
-                    ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
-                }
-            }.take(30) // Limit to prevent token bloat
-
-            val apiKey = geminiKeyStore.getApiKey()
-            if (apiKey == null) {
-                clearVoiceParsingMetadata()
-                voiceCaptureManager.showPreview(transcribedText = normalizedText)
-                return@launch
-            }
-
-            val parseResult = geminiRepository.parseVoiceInput(
-                apiKey = apiKey,
-                rawText = normalizedText,
-                existingLists = existingLists,
-                existingTasks = existingTasks,
-                todayDate = LocalDate.now()
-            )
-
-            parseResult.fold(
-                onSuccess = { parsed ->
-                    parsedVoiceDueDate = parsed.dueDate
-                    parsedVoiceTargetListId = resolveKnownTaskListId(parsed.targetListId)
-                    parsedVoiceParentTaskId = parsed.parentTaskId
-                    
-                    if (parsed.clarification != null) {
-                        voiceCaptureManager.showPreview(
-                            transcribedText = normalizedText,
-                            clarification = parsed.clarification
-                        )
-                    } else {
-                        voiceCaptureManager.showPreview(
-                            transcribedText = parsed.title.ifBlank { normalizedText },
-                            dueDate = parsedVoiceDueDate,
-                            targetListId = parsedVoiceTargetListId
-                        )
-                    }
-                },
-                onFailure = {
-                    clearVoiceParsingMetadata()
-                    voiceCaptureManager.showPreview(transcribedText = normalizedText)
-                }
-            )
-        }
-    }
-
-    private fun clearVoiceParsingMetadata() {
-        parsedVoiceDueDate = null
-        parsedVoiceTargetListId = null
-        parsedVoiceParentTaskId = null
     }
 
     private fun resolveKnownTaskListId(candidateId: String?): String? {
@@ -652,6 +594,7 @@ class PhoneCaptureViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        voiceParsingCoordinator.destroy()
         voiceCaptureManager.destroy()
     }
 

@@ -68,6 +68,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -117,6 +119,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
@@ -291,6 +294,7 @@ fun TaskWallScreen(
     var isViewSwitcherFocused by remember { mutableStateOf(false) }
     var contextMenuTask by remember { mutableStateOf<Task?>(null) }
     var contextMenuSelectedIndex by remember { mutableIntStateOf(0) }
+    var voicePreviewFocus by remember { mutableIntStateOf(0) } // 0=Confirm, 1=Cancel
     val viewSwitcherOptions = remember {
         listOf(
             ViewSwitcherOption(key = "tasks", label = "Tasks"),
@@ -687,6 +691,15 @@ fun TaskWallScreen(
         }
     }
 
+    // Reset voice preview focus when entering Preview state
+    LaunchedEffect(voiceState) {
+        if (voiceState is VoiceInputState.Preview) {
+            voicePreviewFocus = 0
+        }
+    }
+
+    BackHandler(enabled = voiceState is VoiceInputState.Preview) { onCancelVoice() }
+    BackHandler(enabled = voiceState is VoiceInputState.Error) { onDismissVoiceError() }
     BackHandler(enabled = contextMenuTask != null) { contextMenuTask = null }
     BackHandler(enabled = showSettings) { showSettings = false }
 
@@ -701,6 +714,44 @@ fun TaskWallScreen(
                 if (undoVisible && keyEvent.type == KeyEventType.KeyUp && keyEvent.key in listOf(Key.Enter, Key.NumPadEnter)) {
                     onUndo()
                     return@onKeyEvent true
+                }
+                // Voice overlay key handling — consume all keys during non-Idle voice states
+                if (voiceState is VoiceInputState.Preview) {
+                    if (keyEvent.type == KeyEventType.KeyDown) {
+                        when (keyEvent.key) {
+                            Key.DirectionRight, Key.DirectionDown, Key.DirectionLeft, Key.DirectionUp -> {
+                                voicePreviewFocus = if (voicePreviewFocus == 0) 1 else 0
+                                performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+                            }
+                            Key.Enter, Key.NumPadEnter -> {
+                                if (voicePreviewFocus == 0) {
+                                    onConfirmVoice((voiceState as VoiceInputState.Preview).targetListId)
+                                } else {
+                                    onCancelVoice()
+                                }
+                                performAppHaptic(view, context, AppHapticPattern.CONFIRM)
+                            }
+                        }
+                    }
+                    return@onKeyEvent true
+                }
+                if (voiceState is VoiceInputState.Error) {
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key in listOf(Key.Enter, Key.NumPadEnter)) {
+                        onDismissVoiceError()
+                    }
+                    return@onKeyEvent true
+                }
+                if (voiceState is VoiceInputState.Processing) {
+                    return@onKeyEvent true
+                }
+                // During Listening, allow hold-to-talk key-up to pass through
+                // but consume all other keys (nav, new presses)
+                if (voiceState is VoiceInputState.Listening) {
+                    if (keyEvent.type == KeyEventType.KeyUp && holdToTalkKey == keyEvent.key) {
+                        // Let this fall through to the hold-to-talk release handler below
+                    } else {
+                        return@onKeyEvent true
+                    }
                 }
                 // Encoder navigation when context menu is open
                 if (contextMenuTask != null) {
@@ -1020,6 +1071,158 @@ fun TaskWallScreen(
                     .padding(end = 32.dp, bottom = 32.dp)
             ) {
                 VoiceFab(onClick = { wakeUp(); startVoiceWithPermission() })
+            }
+        }
+
+        // Voice overlay — renders when voice state is not Idle
+        AnimatedVisibility(
+            visible = voiceState !is VoiceInputState.Idle,
+            enter = fadeIn(animationSpec = tween(200)),
+            exit = fadeOut(animationSpec = tween(300))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f)),
+                contentAlignment = Alignment.Center
+            ) {
+                when (val state = voiceState) {
+                    is VoiceInputState.Listening -> {
+                        WaveformVisualizer(
+                            amplitudeLevel = state.amplitudeLevel,
+                            isActive = true,
+                            modifier = Modifier.size(200.dp)
+                        )
+                    }
+                    is VoiceInputState.Processing -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(
+                                color = colors.accentPrimary,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "Processing...",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = colors.textSecondary
+                            )
+                        }
+                    }
+                    is VoiceInputState.Preview -> {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth(0.7f)
+                                .padding(32.dp),
+                            colors = CardDefaults.cardColors(containerColor = colors.surfaceCard),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(24.dp)) {
+                                Text(
+                                    "Draft Task",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.textSecondary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    state.transcribedText,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = colors.textPrimary
+                                )
+                                if (state.dueDate != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        "Due: ${state.dueDate}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.accentWarm
+                                    )
+                                }
+                                if (state.clarification != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        state.clarification,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colors.textSecondary
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(24.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (voicePreviewFocus == 0) colors.accentPrimary
+                                                else colors.surfaceExpanded
+                                            )
+                                            .clickable { onConfirmVoice(state.targetListId) }
+                                            .padding(vertical = 12.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "Confirm",
+                                            color = if (voicePreviewFocus == 0) Color.White
+                                                    else colors.textPrimary
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (voicePreviewFocus == 1) colors.urgencyOverdue.copy(alpha = 0.3f)
+                                                else colors.surfaceExpanded
+                                            )
+                                            .clickable { onCancelVoice() }
+                                            .padding(vertical = 12.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "Cancel",
+                                            color = if (voicePreviewFocus == 1) colors.urgencyOverdue
+                                                    else colors.textSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    is VoiceInputState.Error -> {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth(0.6f)
+                                .padding(32.dp)
+                                .clickable { onDismissVoiceError() },
+                            colors = CardDefaults.cardColors(containerColor = colors.surfaceCard),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    "Voice Error",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.urgencyOverdue
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    state.message,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = colors.textSecondary,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    "Click to dismiss",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colors.textSecondary.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    }
+                    else -> {} // Idle handled by AnimatedVisibility
+                }
             }
         }
 
