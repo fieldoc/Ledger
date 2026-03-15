@@ -24,11 +24,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
@@ -115,6 +117,19 @@ fun Calendar3DayView(
     var dragDayColumn by remember { mutableIntStateOf(-1) }
     val isDragging = dragStartSlotIdx >= 0
 
+    // Auto-scroll to current time, positioned ~1/4 from the top
+    val listState = rememberLazyListState()
+    LaunchedEffect(centerDate) {
+        if (!days.any { it == LocalDate.now() }) return@LaunchedEffect
+        val currentTime = LocalDateTime.now()
+        if (currentTime.hour < 7) return@LaunchedEffect
+        // Slot index within the half-hour grid (0-based from startHour=7)
+        val currentSlotIdx = ((currentTime.hour - 7) * 2 + currentTime.minute / 30)
+            .coerceIn(0, slotCount - 1)
+        // +1 for the header item, -2 to show ~1 hour of past above
+        listState.scrollToItem(maxOf(0, currentSlotIdx + 1 - 2))
+    }
+
     val dragRange: SlotDragRange? = if (isDragging && dragDayColumn in daySlots.indices) {
         val daySlotList = daySlots[dragDayColumn]
         if (dragStartSlotIdx in daySlotList.indices && dragCurrentSlotIdx in daySlotList.indices) {
@@ -136,6 +151,7 @@ fun Calendar3DayView(
     var totalWidthPx by remember { mutableIntStateOf(0) }
 
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { totalWidthPx = it.width }

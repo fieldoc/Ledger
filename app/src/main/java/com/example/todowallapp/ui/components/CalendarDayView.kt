@@ -27,11 +27,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -201,6 +203,32 @@ fun CalendarDayView(
 
     var expandedRangeStarts by remember(date) { mutableStateOf(setOf<LocalDateTime>()) }
 
+    // Auto-scroll to current time, positioned ~1/4 from the top
+    val listState = rememberLazyListState()
+    LaunchedEffect(date) {
+        if (date != LocalDate.now()) return@LaunchedEffect
+        val currentTime = LocalDateTime.now()
+        if (currentTime.hour < 7) return@LaunchedEffect // before grid start, no scroll needed
+        val weatherOffset = if (weatherForecast.containsKey(date)) 1 else 0
+        var targetIdx = slotItems.size - 1 // default to end if past grid
+        for ((idx, item) in slotItems.withIndex()) {
+            when (item) {
+                is CalendarSlotItem.SingleSlot -> {
+                    if (currentTime < item.slot.start.plusMinutes(30)) {
+                        targetIdx = idx; break
+                    }
+                }
+                is CalendarSlotItem.CompressedRange -> {
+                    if (currentTime < item.endTime) {
+                        targetIdx = idx; break
+                    }
+                }
+            }
+        }
+        // Scroll 2 items before current time → ~1 hour of past visible above
+        listState.scrollToItem(maxOf(0, targetIdx + weatherOffset - 2))
+    }
+
     // Drag selection state
     var dragStartSlotIdx by remember { mutableIntStateOf(-1) }
     var dragCurrentSlotIdx by remember { mutableIntStateOf(-1) }
@@ -219,6 +247,7 @@ fun CalendarDayView(
     val slotHeightPx = with(density) { dims.daySlotHeightEmpty.toPx() }
 
     LazyColumn(
+        state = listState,
         modifier = modifier
             .pointerInput(allSlots, slotHeightPx) {
                 detectDragGesturesAfterLongPress(
