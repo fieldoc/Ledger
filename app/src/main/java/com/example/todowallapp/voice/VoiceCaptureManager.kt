@@ -11,6 +11,9 @@ import android.speech.SpeechRecognizer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.example.todowallapp.capture.repository.ParsedVoiceResponse
+import com.example.todowallapp.capture.repository.ParsedVoiceTaskItem
+import com.example.todowallapp.capture.repository.VoiceIntent
 import java.time.LocalDate
 import java.util.Locale
 
@@ -22,11 +25,14 @@ sealed class VoiceInputState {
     ) : VoiceInputState()
     object Processing : VoiceInputState()
     data class Preview(
-        val transcribedText: String,
-        val dueDate: LocalDate? = null,
-        val targetListId: String? = null,
-        val clarification: String? = null
-    ) : VoiceInputState()
+        val response: ParsedVoiceResponse
+    ) : VoiceInputState() {
+        // Convenience accessors for backwards compatibility
+        val transcribedText: String get() = response.tasks.firstOrNull()?.title ?: response.rawTranscript
+        val dueDate: LocalDate? get() = response.tasks.firstOrNull()?.dueDate
+        val targetListId: String? get() = response.tasks.firstOrNull()?.targetListId
+        val clarification: String? get() = response.clarification
+    }
     data class Error(val message: String) : VoiceInputState()
 }
 
@@ -135,7 +141,7 @@ class VoiceCaptureManager(private val context: Context) {
                             _state.value = VoiceInputState.Processing
                             callback(text)
                         } else {
-                            showPreview(text)
+                            showPreviewFallback(text)
                         }
                     } else {
                         _state.value = VoiceInputState.Error("Didn't catch that")
@@ -177,17 +183,28 @@ class VoiceCaptureManager(private val context: Context) {
         _state.value = VoiceInputState.Idle
     }
 
-    fun showPreview(
-        transcribedText: String,
-        dueDate: LocalDate? = null,
-        targetListId: String? = null,
-        clarification: String? = null
-    ) {
-        _state.value = VoiceInputState.Preview(
-            transcribedText = transcribedText,
-            dueDate = dueDate,
-            targetListId = targetListId,
-            clarification = clarification
+    fun showPreview(response: ParsedVoiceResponse) {
+        _state.value = VoiceInputState.Preview(response = response)
+    }
+
+    fun showPreviewFallback(rawText: String) {
+        showPreview(
+            ParsedVoiceResponse(
+                intent = VoiceIntent.ADD,
+                tasks = listOf(
+                    ParsedVoiceTaskItem(
+                        title = rawText,
+                        dueDate = null,
+                        preferredTime = null,
+                        targetListId = null,
+                        parentTaskId = null,
+                        confidence = 0f,
+                        duplicateOf = null
+                    )
+                ),
+                clarification = null,
+                rawTranscript = rawText
+            )
         )
     }
 

@@ -3,29 +3,28 @@ package com.example.todowallapp.capture
 import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
+import com.example.todowallapp.capture.repository.ParsedVoiceResponse
 import com.example.todowallapp.security.GeminiKeyStore
 import com.example.todowallapp.voice.VoiceCaptureManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalTime
 
 /**
  * Shared coordinator that handles voice transcription → Gemini AI parsing → preview.
  *
  * Both TaskWallViewModel and PhoneCaptureViewModel delegate their voice-parsing
- * pipeline to this class, eliminating ~120 lines of duplicated logic.
+ * pipeline to this class. Uses the V2 prompt with multi-task extraction,
+ * intent classification, duplicate detection, and temporal reasoning.
  */
 class VoiceParsingCoordinator(
     private val voiceCaptureManager: VoiceCaptureManager,
     private val geminiCaptureRepository: GeminiCaptureRepository,
     private val geminiKeyStore: GeminiKeyStore
 ) {
-    var parsedDueDate: LocalDate? = null
-        private set
-    var parsedTargetListId: String? = null
-        private set
-    var parsedParentTaskId: String? = null
+    var lastResponse: ParsedVoiceResponse? = null
         private set
 
     private var parseJob: Job? = null
@@ -35,8 +34,7 @@ class VoiceParsingCoordinator(
      *
      * @param scope          CoroutineScope (typically viewModelScope) for launching parse work.
      * @param listProvider   Returns the current list of [ExistingListRef] for Gemini context.
-     * @param taskProvider   Returns the current list of [ExistingTaskRef] for hierarchy context.
-     *                       Defaults to empty (TaskWallViewModel doesn't use this).
+     * @param taskProvider   Returns the current list of [ExistingTaskRef] for hierarchy/duplicate context.
      * @param listIdValidator Validates that a candidate list ID actually exists. Returns the ID
      *                        if valid, null otherwise.
      */
@@ -78,50 +76,43 @@ class VoiceParsingCoordinator(
             val apiKey = geminiKeyStore.getApiKey()
             if (apiKey == null) {
                 clearMetadata()
-                voiceCaptureManager.showPreview(transcribedText = normalizedText)
+                voiceCaptureManager.showPreviewFallback(normalizedText)
                 return@launch
             }
 
-            val parseResult = geminiCaptureRepository.parseVoiceInput(
+            val parseResult = geminiCaptureRepository.parseVoiceInputV2(
                 apiKey = apiKey,
                 rawText = normalizedText,
                 existingLists = existingLists,
                 existingTasks = existingTasks,
-                todayDate = LocalDate.now()
+                todayDate = LocalDate.now(),
+                currentTime = LocalTime.now()
             )
 
             parseResult.fold(
-                onSuccess = { parsed ->
-                    parsedDueDate = parsed.dueDate
-                    parsedTargetListId = listIdValidator(parsed.targetListId)
-                    parsedParentTaskId = parsed.parentTaskId
-
-                    if (parsed.clarification != null) {
-                        voiceCaptureManager.showPreview(
-                            transcribedText = normalizedText,
-                            clarification = parsed.clarification
-                        )
-                    } else {
-                        voiceCaptureManager.showPreview(
-                            transcribedText = parsed.title.ifBlank { normalizedText },
-                            dueDate = parsedDueDate,
-                            targetListId = parsedTargetListId
-                        )
-                    }
+                onSuccess = { response ->
+                    // Validate list IDs through the validator
+                    val validatedResponse = response.copy(
+                        tasks = response.tasks.map { task ->
+                            task.copy(
+                                targetListId = listIdValidator(task.targetListId)
+                            )
+                        }
+                    )
+                    lastResponse = validatedResponse
+                    voiceCaptureManager.showPreview(validatedResponse)
                 },
                 onFailure = {
                     clearMetadata()
-                    voiceCaptureManager.showPreview(transcribedText = normalizedText)
+                    voiceCaptureManager.showPreviewFallback(normalizedText)
                 }
             )
         }
     }
 
-    /** Cancel any in-flight parse and reset all parsed metadata fields. */
+    /** Cancel any in-flight parse and reset stored response. */
     fun clearMetadata() {
-        parsedDueDate = null
-        parsedTargetListId = null
-        parsedParentTaskId = null
+        lastResponse = null
     }
 
     /** Cancel in-flight work. Call from ViewModel.onCleared(). */

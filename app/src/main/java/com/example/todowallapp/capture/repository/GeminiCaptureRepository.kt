@@ -12,6 +12,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
+import java.time.LocalTime
 
 private const val GEMINI_BASE_URL =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
@@ -22,6 +23,27 @@ data class ParsedVoiceTask(
     val targetListId: String?,
     val parentTaskId: String? = null,
     val clarification: String? = null
+)
+
+enum class VoiceIntent { ADD, COMPLETE, RESCHEDULE, DELETE, QUERY, AMEND }
+
+enum class PreferredTime { MORNING, AFTERNOON, EVENING }
+
+data class ParsedVoiceTaskItem(
+    val title: String,
+    val dueDate: LocalDate?,
+    val preferredTime: PreferredTime?,
+    val targetListId: String?,
+    val parentTaskId: String?,
+    val confidence: Float,
+    val duplicateOf: String?
+)
+
+data class ParsedVoiceResponse(
+    val intent: VoiceIntent,
+    val tasks: List<ParsedVoiceTaskItem>,
+    val clarification: String?,
+    val rawTranscript: String
 )
 
 data class ExistingTaskRef(
@@ -121,6 +143,44 @@ class GeminiCaptureRepository(
             )
             val responseText = extractTextFromGeminiResponse(response)
             parseVoiceTaskJson(responseText, existingLists, existingTasks)
+        }
+    }
+
+    suspend fun parseVoiceInputV2(
+        apiKey: String,
+        rawText: String,
+        existingLists: List<ExistingListRef>,
+        existingTasks: List<ExistingTaskRef> = emptyList(),
+        todayDate: LocalDate = LocalDate.now(),
+        currentTime: LocalTime = LocalTime.now()
+    ): Result<ParsedVoiceResponse> = withContext(Dispatchers.IO) {
+        runCatching {
+            val prompt = buildVoicePromptV2(
+                rawText = rawText,
+                existingLists = existingLists,
+                existingTasks = existingTasks,
+                todayDate = todayDate,
+                currentTime = currentTime
+            )
+            val requestBody = JsonObject().apply {
+                add("contents", JsonArray().apply {
+                    add(JsonObject().apply {
+                        add("parts", JsonArray().apply {
+                            add(JsonObject().apply { addProperty("text", prompt) })
+                        })
+                    })
+                })
+                add("generationConfig", JsonObject().apply {
+                    addProperty("temperature", 0.1)
+                    addProperty("responseMimeType", "application/json")
+                })
+            }
+            val response = apiClient.generateContent(
+                apiKey = apiKey,
+                requestBody = requestBody
+            )
+            val responseText = extractTextFromGeminiResponse(response)
+            parseVoiceResponseJson(responseText, rawText, existingLists, existingTasks)
         }
     }
 
@@ -358,6 +418,200 @@ class GeminiCaptureRepository(
             targetListId = targetListId,
             parentTaskId = parentTaskId,
             clarification = null
+        )
+    }
+
+    private fun buildVoicePromptV2(
+        rawText: String,
+        existingLists: List<ExistingListRef>,
+        existingTasks: List<ExistingTaskRef>,
+        todayDate: LocalDate,
+        currentTime: LocalTime
+    ): String {
+        val listContext = if (existingLists.isEmpty()) {
+            "No existing lists found."
+        } else {
+            existingLists.joinToString(separator = "\n") { list ->
+                "- List: ${list.title} [id=${list.id}]"
+            }
+        }
+        val taskContext = if (existingTasks.isEmpty()) {
+            ""
+        } else {
+            "\nExisting Tasks:\n" + existingTasks.joinToString(separator = "\n") { task ->
+                "- Task: ${task.title} [id=${task.id}] in listId=${task.listId}"
+            }
+        }
+        val hour = currentTime.hour
+        val timeOfDay = when {
+            hour < 12 -> "morning"
+            hour < 17 -> "afternoon"
+            else -> "evening"
+        }
+
+        return """
+            You are an expert voice-to-task assistant. You convert natural, conversational speech into structured task operations. Users speak casually and verbosely — your job is to extract precise, actionable intent.
+
+            CURRENT CONTEXT:
+            Today: $todayDate (${todayDate.dayOfWeek})
+            Current time: $currentTime ($timeOfDay)
+
+            Available lists:
+            $listContext$taskContext
+
+            INPUT TRANSCRIPT:
+            "$rawText"
+
+            INSTRUCTIONS:
+
+            1) INTENT CLASSIFICATION
+               Classify the primary intent of the utterance:
+               - "add" — creating new tasks (DEFAULT if ambiguous)
+               - "complete" — marking existing tasks as done ("mark X as done", "finished X", "X is done", "did X")
+               - "reschedule" — changing due date of existing task ("move X to Friday", "push X back a week")
+               - "delete" — removing an existing task ("remove X", "delete X", "get rid of X")
+               - "query" — asking about tasks ("what's on my list?", "what do I have today?")
+               - "amend" — modifying the most recent voice input ("actually make that Friday", "change it to...")
+
+               For complete/reschedule/delete: match the spoken description to an existing task by semantic similarity. Set the matching task's ID in the first task item's parentTaskId field (repurposed as "target existing task ID").
+
+            2) MULTI-TASK EXTRACTION
+               A single utterance may contain multiple tasks. Split compound speech into individual tasks:
+               - "Buy milk and call the dentist" → 2 tasks
+               - "I need to do laundry, oh and pick up the kids at 3, and remind me about the meeting" → 3 tasks
+               - Connectors: "and", "also", "oh and", "plus", "as well as", "remind me to also"
+               - Each task gets its own entry in the tasks array with independent fields.
+               - For non-add intents, there is typically only 1 task (the target of the action).
+
+            3) CONVERSATIONAL NOISE STRIPPING
+               Extract the actionable intent and reduce to the shortest imperative phrase that fully captures the task. Speech is messy — strip aggressively:
+               - "Uh so like I was thinking we should probably get around to painting the living room" → "Paint living room"
+               - "Hey can you remind me to um pick up my prescription from CVS tomorrow" → "Pick up prescription from CVS"
+               - "I really need to at some point figure out what's going on with the water heater" → "Check water heater"
+               - Remove: hedging, filler (um, uh, like, you know, so), false starts, self-corrections, politeness wrappers, thinking-out-loud phrasing
+               - Keep: specific nouns, locations, people, quantities, deadlines
+
+            4) TEMPORAL REASONING
+               Extract due dates from natural language. Use today ($todayDate, ${todayDate.dayOfWeek}) for resolution:
+               - "tomorrow" → next day
+               - "this weekend" → next Saturday
+               - "end of week" / "by end of week" → next Friday
+               - "next week" → next Monday
+               - "next [dayname]" → the [dayname] in the coming week (not this week)
+               - "in a couple days" / "in a few days" → today + 2 / today + 3
+               - "in a week" → today + 7
+               - "by [dayname]" → the nearest future occurrence of that day
+               - "soon" / "sometime" / "eventually" / "whenever" → null (no date)
+               - "end of month" → last day of current month
+
+               TIME-OF-DAY PREFERENCE (preferredTime field):
+               - "first thing" / "in the morning" / "before noon" → "morning"
+               - "after lunch" / "this afternoon" / "in the afternoon" → "afternoon"
+               - "tonight" / "this evening" / "after work" / "after dinner" → "evening"
+               - No time indication → null
+
+            5) DUPLICATE DETECTION
+               Compare each extracted task against Existing Tasks above. If a new task is semantically equivalent to an existing one (same core action, same subject), set duplicateOf to that task's ID.
+               - "Buy groceries" is a duplicate of "Get groceries"
+               - "Call mom" is a duplicate of "Call Mom"
+               - "Buy groceries for the party" is NOT a duplicate of "Buy groceries" (different scope)
+               Be conservative — only flag clear semantic matches, not vague similarities.
+
+            6) LIST INFERENCE
+               Route each task to the most appropriate list, even when no list is explicitly mentioned:
+               - Infer from task content: "Buy drill bit" → Hardware/Home Improvement list
+               - Infer from semantic domain: "Schedule dentist" → Health/Medical or Personal list
+               - Match synonyms: "groceries", "food", "ingredients" → Shopping list
+               - If explicitly mentioned ("add to my work list"), use the mentioned list
+               - If no confident match, set targetListId to null (app will use the current/default list)
+
+            7) CONFIDENCE SCORING
+               Rate confidence from 0.0 to 1.0 for each task:
+               - 0.85-1.0: Clear, unambiguous single intent with obvious list/date assignment
+               - 0.5-0.84: Reasonable inference but some ambiguity (fuzzy list match, implied date)
+               - Below 0.5: Uncertain — consider adding a clarification message
+               If overall confidence is below 0.5, return a friendly clarification in the clarification field.
+
+            8) RESPONSE FORMAT
+               Return ONLY strict JSON in this schema:
+               {
+                 "intent": "add|complete|reschedule|delete|query|amend",
+                 "tasks": [
+                   {
+                     "title": "string",
+                     "dueDate": "YYYY-MM-DD|null",
+                     "preferredTime": "morning|afternoon|evening|null",
+                     "targetListId": "string|null",
+                     "parentTaskId": "string|null",
+                     "confidence": 0.0,
+                     "duplicateOf": "existing-task-id|null"
+                   }
+                 ],
+                 "clarification": "string|null"
+               }
+
+               For "query" intent, tasks array may be empty.
+               For "amend" intent, return the amended version as a single task.
+
+            9) CLEAN OUTPUT: No markdown, no commentary. Just the JSON.
+        """.trimIndent()
+    }
+
+    private fun parseVoiceResponseJson(
+        rawJson: String,
+        rawTranscript: String,
+        existingLists: List<ExistingListRef>,
+        existingTasks: List<ExistingTaskRef>
+    ): ParsedVoiceResponse {
+        val root = JsonParser.parseString(rawJson).asJsonObject
+
+        val intentStr = root.stringValue("intent") ?: "add"
+        val intent = runCatching {
+            VoiceIntent.valueOf(intentStr.uppercase())
+        }.getOrDefault(VoiceIntent.ADD)
+
+        val clarification = root.stringValue("clarification")
+
+        val tasksArray = root.getAsJsonArray("tasks")
+        val tasks = if (tasksArray != null && tasksArray.size() > 0) {
+            tasksArray.map { element ->
+                val obj = element.asJsonObject
+                val title = obj.stringValue("title")?.trim()?.takeIf { it.isNotEmpty() } ?: ""
+                val dueDate = obj.stringValue("dueDate")?.let { raw ->
+                    runCatching { LocalDate.parse(raw) }.getOrNull()
+                }
+                val preferredTime = obj.stringValue("preferredTime")?.let { raw ->
+                    runCatching { PreferredTime.valueOf(raw.uppercase()) }.getOrNull()
+                }
+                val targetListId = obj.stringValue("targetListId")
+                    ?.takeIf { candidateId -> existingLists.any { it.id == candidateId } }
+                val parentTaskId = obj.stringValue("parentTaskId")
+                    ?.takeIf { pId -> existingTasks.any { it.id == pId } }
+                val confidence = runCatching {
+                    obj.get("confidence")?.asFloat
+                }.getOrNull() ?: 0.5f
+                val duplicateOf = obj.stringValue("duplicateOf")
+                    ?.takeIf { dId -> existingTasks.any { it.id == dId } }
+
+                ParsedVoiceTaskItem(
+                    title = title,
+                    dueDate = dueDate,
+                    preferredTime = preferredTime,
+                    targetListId = targetListId,
+                    parentTaskId = parentTaskId,
+                    confidence = confidence.coerceIn(0f, 1f),
+                    duplicateOf = duplicateOf
+                )
+            }
+        } else {
+            emptyList()
+        }
+
+        return ParsedVoiceResponse(
+            intent = intent,
+            tasks = tasks,
+            clarification = clarification,
+            rawTranscript = rawTranscript
         )
     }
 

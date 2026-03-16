@@ -153,6 +153,7 @@ import com.example.todowallapp.ui.utils.performAppHaptic
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
 import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.viewmodel.ThemeMode
+import com.example.todowallapp.capture.repository.VoiceIntent
 import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1132,6 +1133,15 @@ fun TaskWallScreen(
                         }
                     }
                     is VoiceInputState.Preview -> {
+                        val response = state.response
+                        val intentLabel = when (response.intent) {
+                            VoiceIntent.ADD -> if (response.tasks.size > 1) "Draft Tasks" else "Draft Task"
+                            VoiceIntent.COMPLETE -> "Complete Task"
+                            VoiceIntent.DELETE -> "Delete Task"
+                            VoiceIntent.RESCHEDULE -> "Reschedule Task"
+                            VoiceIntent.QUERY -> "Tasks Found"
+                            VoiceIntent.AMEND -> "Amended Task"
+                        }
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth(0.7f)
@@ -1141,34 +1151,67 @@ fun TaskWallScreen(
                         ) {
                             Column(modifier = Modifier.padding(24.dp)) {
                                 Text(
-                                    "Draft Task",
+                                    intentLabel,
                                     style = MaterialTheme.typography.labelMedium,
                                     color = colors.textSecondary
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    state.transcribedText,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = colors.textPrimary
-                                )
-                                if (state.dueDate != null) {
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                response.tasks.forEachIndexed { index, task ->
+                                    if (index > 0) {
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Box(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .height(0.5.dp)
+                                                .background(colors.textSecondary.copy(alpha = 0.2f))
+                                        )
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                    }
                                     Text(
-                                        "Due: ${state.dueDate}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = colors.accentWarm
+                                        task.title.ifBlank { response.rawTranscript },
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = colors.textPrimary
                                     )
+                                    if (task.dueDate != null || task.preferredTime != null) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        val dueParts = buildList {
+                                            task.dueDate?.let { add("Due: $it") }
+                                            task.preferredTime?.let { add(it.name.lowercase()) }
+                                        }
+                                        Text(
+                                            dueParts.joinToString(" \u00B7 "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.accentWarm
+                                        )
+                                    }
+                                    if (task.duplicateOf != null) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "Similar task already exists",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colors.textSecondary.copy(alpha = 0.7f)
+                                        )
+                                    }
                                 }
-                                if (state.clarification != null) {
+                                val clarificationText = state.clarification
+                                if (clarificationText != null) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        state.clarification,
+                                        clarificationText,
                                         style = MaterialTheme.typography.bodySmall,
                                         color = colors.textSecondary
                                     )
                                 }
                                 Spacer(modifier = Modifier.height(24.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    val confirmLabel = when (response.intent) {
+                                        VoiceIntent.ADD -> if (response.tasks.size > 1) "Add All" else "Confirm"
+                                        VoiceIntent.COMPLETE -> "Complete"
+                                        VoiceIntent.DELETE -> "Delete"
+                                        VoiceIntent.RESCHEDULE -> "Reschedule"
+                                        VoiceIntent.QUERY -> "Dismiss"
+                                        VoiceIntent.AMEND -> "Confirm"
+                                    }
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
@@ -1182,7 +1225,7 @@ fun TaskWallScreen(
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
-                                            "Confirm",
+                                            confirmLabel,
                                             color = if (voicePreviewFocus == 0) Color.White
                                                     else colors.textPrimary
                                         )

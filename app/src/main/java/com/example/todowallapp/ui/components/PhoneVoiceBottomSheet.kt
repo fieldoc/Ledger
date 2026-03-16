@@ -142,9 +142,10 @@ fun PhoneVoiceBottomSheet(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                if (voiceState.clarification != null) {
+                                val clarificationText = voiceState.clarification
+                                if (clarificationText != null) {
                                     Text(
-                                        text = voiceState.clarification,
+                                        text = clarificationText,
                                         style = MaterialTheme.typography.titleMedium,
                                         color = colors.accentPrimary,
                                         fontWeight = FontWeight.Bold,

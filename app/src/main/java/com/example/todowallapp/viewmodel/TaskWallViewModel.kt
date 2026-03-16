@@ -12,7 +12,9 @@ import com.example.todowallapp.auth.AuthState
 import com.example.todowallapp.auth.GoogleAuthManager
 import com.example.todowallapp.capture.VoiceParsingCoordinator
 import com.example.todowallapp.capture.repository.ExistingListRef
+import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
+import com.example.todowallapp.capture.repository.VoiceIntent
 import com.example.todowallapp.data.model.CalendarEvent
 import com.example.todowallapp.data.model.CalendarViewMode
 import com.example.todowallapp.data.model.GoogleCalendar
@@ -200,6 +202,13 @@ class TaskWallViewModel(
                 _uiState.value.taskLists.map { list ->
                     ExistingListRef(id = list.id, title = list.title)
                 }
+            },
+            taskProvider = {
+                _uiState.value.allTaskLists.flatMap { list ->
+                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
+                        ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
+                    }
+                }.take(30)
             },
             listIdValidator = ::resolveKnownTaskListId
         )
@@ -711,36 +720,117 @@ class TaskWallViewModel(
         voiceCaptureManager.cancel()
     }
 
-    fun confirmVoiceTask(targetListId: String? = null) {
+    fun confirmVoiceTasks(overrideListId: String? = null) {
         val currentState = voiceCaptureManager.state.value
-        if (currentState is VoiceInputState.Preview) {
-            viewModelScope.launch {
-                val taskListId = resolveKnownTaskListId(targetListId)
-                    ?: resolveKnownTaskListId(currentState.targetListId)
-                    ?: resolveKnownTaskListId(voiceParsingCoordinator.parsedTargetListId)
-                    ?: _uiState.value.selectedTaskListId
-                    ?: _uiState.value.taskLists.firstOrNull()?.id
-                    ?: return@launch
-                val dueDate = currentState.dueDate ?: voiceParsingCoordinator.parsedDueDate
-                val parentId = voiceParsingCoordinator.parsedParentTaskId
-                val result = tasksRepository.createTask(
-                    taskListId = taskListId,
-                    title = currentState.transcribedText,
-                    dueDate = dueDate,
-                    parentId = parentId
-                )
-                result.fold(
-                    onSuccess = {
+        if (currentState !is VoiceInputState.Preview) return
+        val response = currentState.response
+
+        viewModelScope.launch {
+            val defaultListId = _uiState.value.selectedTaskListId
+                ?: _uiState.value.taskLists.firstOrNull()?.id
+
+            when (response.intent) {
+                VoiceIntent.ADD -> {
+                    var anyFailed = false
+                    for (task in response.tasks) {
+                        if (task.title.isBlank()) continue
+                        val listId = resolveKnownTaskListId(overrideListId)
+                            ?: resolveKnownTaskListId(task.targetListId)
+                            ?: defaultListId
+                            ?: continue
+                        val result = tasksRepository.createTask(
+                            taskListId = listId,
+                            title = task.title,
+                            dueDate = task.dueDate,
+                            parentId = task.parentTaskId
+                        )
+                        if (result.isFailure) anyFailed = true
+                    }
+                    if (anyFailed) {
+                        voiceCaptureManager.setError("Some tasks failed to save")
+                    } else {
                         voiceParsingCoordinator.clearMetadata()
                         voiceCaptureManager.resetToIdle()
                         refresh()
-                    },
-                    onFailure = {
-                        voiceCaptureManager.setError("Failed to save task")
                     }
-                )
+                }
+
+                VoiceIntent.COMPLETE -> {
+                    val targetTask = response.tasks.firstOrNull() ?: return@launch
+                    val targetId = targetTask.parentTaskId ?: return@launch
+                    val targetListId = findTaskListId(targetId) ?: return@launch
+                    tasksRepository.completeTask(targetListId, targetId).fold(
+                        onSuccess = {
+                            voiceParsingCoordinator.clearMetadata()
+                            voiceCaptureManager.resetToIdle()
+                            refresh()
+                        },
+                        onFailure = {
+                            voiceCaptureManager.setError("Failed to complete task")
+                        }
+                    )
+                }
+
+                VoiceIntent.DELETE -> {
+                    val targetTask = response.tasks.firstOrNull() ?: return@launch
+                    val targetId = targetTask.parentTaskId ?: return@launch
+                    val targetListId = findTaskListId(targetId) ?: return@launch
+                    tasksRepository.deleteTask(targetListId, targetId).fold(
+                        onSuccess = {
+                            voiceParsingCoordinator.clearMetadata()
+                            voiceCaptureManager.resetToIdle()
+                            refresh()
+                        },
+                        onFailure = {
+                            voiceCaptureManager.setError("Failed to delete task")
+                        }
+                    )
+                }
+
+                VoiceIntent.RESCHEDULE -> {
+                    // Reschedule not yet supported (no updateTask API method)
+                    voiceCaptureManager.setError("Rescheduling not yet supported")
+                }
+
+                VoiceIntent.QUERY -> {
+                    // Query intent: preview shows matching tasks, no action needed
+                    voiceParsingCoordinator.clearMetadata()
+                    voiceCaptureManager.resetToIdle()
+                }
+
+                VoiceIntent.AMEND -> {
+                    // Amend: treat as a new ADD with the corrected task
+                    val task = response.tasks.firstOrNull()
+                    if (task != null && task.title.isNotBlank()) {
+                        val listId = resolveKnownTaskListId(overrideListId)
+                            ?: resolveKnownTaskListId(task.targetListId)
+                            ?: defaultListId
+                            ?: return@launch
+                        tasksRepository.createTask(
+                            taskListId = listId,
+                            title = task.title,
+                            dueDate = task.dueDate,
+                            parentId = task.parentTaskId
+                        ).fold(
+                            onSuccess = {
+                                voiceParsingCoordinator.clearMetadata()
+                                voiceCaptureManager.resetToIdle()
+                                refresh()
+                            },
+                            onFailure = {
+                                voiceCaptureManager.setError("Failed to save task")
+                            }
+                        )
+                    }
+                }
             }
         }
+    }
+
+    private fun findTaskListId(taskId: String): String? {
+        return _uiState.value.allTaskLists
+            .firstOrNull { list -> list.tasks.any { it.id == taskId } }
+            ?.taskList?.id
     }
 
     fun dismissVoiceError() {

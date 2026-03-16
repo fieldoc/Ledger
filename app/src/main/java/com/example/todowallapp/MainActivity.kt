@@ -470,7 +470,7 @@ private fun WallModeContent(
                         onStartVoice = viewModel::startVoiceInput,
                         onStopVoice = viewModel::stopVoiceInput,
                         onCancelVoice = viewModel::cancelVoiceInput,
-                        onConfirmVoice = viewModel::confirmVoiceTask,
+                        onConfirmVoice = { listId -> viewModel.confirmVoiceTasks(listId) },
                         onDismissVoiceError = viewModel::dismissVoiceError,
                         error = uiState.error,
                         onDismissError = viewModel::clearError,
@@ -712,7 +712,7 @@ private fun PhoneModeContent(
         onStartListening = phoneViewModel::startVoiceInput,
         onStopListening = phoneViewModel::stopVoiceInput,
         onCancelListening = phoneViewModel::cancelVoiceInput,
-        onConfirm = phoneViewModel::confirmVoiceTask,
+        onConfirm = { listId -> phoneViewModel.confirmVoiceTasks(listId) },
         onDismissError = phoneViewModel::dismissVoiceError
     )
 
