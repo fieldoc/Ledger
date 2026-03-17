@@ -559,6 +559,40 @@ private fun WallModeContent(
                         onViewModeChange = { mode -> viewModel.setCalendarViewMode(mode) },
                         onDaySelectedFromGrid = { date -> viewModel.selectCalendarDate(date) },
                         weatherForecast = weatherForecast,
+                        themeMode = themeMode,
+                        lightStartHour = lightStartHour,
+                        lightEndHour = lightEndHour,
+                        sleepStartHour = sleepStartHour,
+                        sleepEndHour = sleepEndHour,
+                        syncIntervalMinutes = syncIntervalMinutes,
+                        onThemeSettingsChange = { mode, lightStart, lightEnd ->
+                            viewModel.updateThemeSettings(mode, lightStart, lightEnd)
+                        },
+                        onSleepScheduleChange = viewModel::updateSleepSchedule,
+                        onSyncIntervalChange = viewModel::updateSyncInterval,
+                        geminiKeyPresent = geminiKeyPresent,
+                        isValidatingGeminiKey = isValidatingGeminiKey,
+                        geminiKeyError = geminiKeyError,
+                        onSaveGeminiKey = viewModel::validateAndSaveGeminiKey,
+                        onClearGeminiKey = viewModel::clearGeminiKey,
+                        weatherLocation = weatherKeyStore.getLocation() ?: "",
+                        weatherApiKeyPresent = weatherKeyStore.hasApiKey(),
+                        onSaveWeatherLocation = { location ->
+                            weatherKeyStore.setLocation(location)
+                        },
+                        onSaveWeatherApiKey = { key ->
+                            weatherKeyStore.setApiKey(key)
+                        },
+                        onClearWeatherApiKey = {
+                            weatherKeyStore.clearApiKey()
+                        },
+                        onSearchCities = { query ->
+                            weatherRepository.searchCities(query).map { suggestion ->
+                                "${suggestion.name}, ${suggestion.country}"
+                            }
+                        },
+                        onSwitchMode = onSwitchMode,
+                        onSignOut = viewModel::signOut,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
