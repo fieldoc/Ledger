@@ -3,11 +3,13 @@ package com.example.todowallapp.ui.screens
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.ui.theme.LocalWallColors
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,8 +17,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,9 +65,11 @@ import com.example.todowallapp.ui.components.ClockHeader
 import com.example.todowallapp.ui.components.EVENT_ACTION_COUNT
 import com.example.todowallapp.ui.components.EventActionMenu
 import com.example.todowallapp.ui.components.TaskPickerOverlay
+import com.example.todowallapp.ui.components.SettingsPanel
 import com.example.todowallapp.ui.components.ViewSwitcherOption
 import com.example.todowallapp.ui.components.ViewSwitcherPill
 import com.example.todowallapp.ui.components.WeekStrip
+import com.example.todowallapp.viewmodel.ThemeMode
 import com.example.todowallapp.ui.components.buildHalfHourSlots
 import com.example.todowallapp.ui.components.taskPickerRowCount
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
@@ -107,6 +115,29 @@ fun CalendarScreen(
     onViewModeChange: (CalendarViewMode) -> Unit = {},
     onDaySelectedFromGrid: (LocalDate) -> Unit = {},
     weatherForecast: Map<LocalDate, WeatherCondition> = emptyMap(),
+    // Settings
+    themeMode: ThemeMode = ThemeMode.AUTO,
+    lightStartHour: Int = 8,
+    lightEndHour: Int = 19,
+    sleepStartHour: Int = 23,
+    sleepEndHour: Int = 7,
+    syncIntervalMinutes: Int = 5,
+    onThemeSettingsChange: (ThemeMode, Int, Int) -> Unit = { _, _, _ -> },
+    onSleepScheduleChange: (Int, Int) -> Unit = { _, _ -> },
+    onSyncIntervalChange: (Int) -> Unit = {},
+    geminiKeyPresent: Boolean = false,
+    isValidatingGeminiKey: Boolean = false,
+    geminiKeyError: String? = null,
+    onSaveGeminiKey: (String) -> Unit = {},
+    onClearGeminiKey: () -> Unit = {},
+    weatherLocation: String = "",
+    weatherApiKeyPresent: Boolean = false,
+    onSaveWeatherLocation: (String) -> Unit = {},
+    onSaveWeatherApiKey: (String) -> Unit = {},
+    onClearWeatherApiKey: () -> Unit = {},
+    onSearchCities: (suspend (String) -> List<String>) = { emptyList() },
+    onSwitchMode: () -> Unit = {},
+    onSignOut: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -122,6 +153,8 @@ fun CalendarScreen(
     var selectedSlotIndex by remember(selectedDate) { mutableIntStateOf(0) }
     val dims = rememberLayoutDimensions()
     var selectedEventId by remember { mutableStateOf<String?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
+    var isSettingsFocused by remember { mutableStateOf(false) }
     var isViewSwitcherFocused by remember { mutableStateOf(false) }
     var isDateBarFocused by remember { mutableStateOf(false) }
     var isEditingDate by remember { mutableStateOf(false) }
@@ -185,14 +218,78 @@ fun CalendarScreen(
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
 
+                // Settings panel open — encoder click dismisses, all other keys consumed
+                if (showSettings) {
+                    if (keyEvent.key in listOf(Key.Enter, Key.NumPadEnter, Key.Spacebar)) {
+                        showSettings = false
+                    }
+                    return@onKeyEvent true
+                }
+
+                // Header focus: settings button
+                if (isSettingsFocused) {
+                    return@onKeyEvent when (keyEvent.key) {
+                        Key.DirectionRight, Key.DirectionDown -> {
+                            isSettingsFocused = false
+                            isViewSwitcherFocused = true
+                            true
+                        }
+                        Key.DirectionLeft, Key.DirectionUp -> {
+                            // At very top — drill back to parent mode
+                            isSettingsFocused = false
+                            when (calendarViewMode) {
+                                CalendarViewMode.WEEK -> onViewModeChange(CalendarViewMode.MONTH)
+                                CalendarViewMode.DAY -> onViewModeChange(CalendarViewMode.WEEK)
+                                CalendarViewMode.THREE_DAY -> onViewModeChange(CalendarViewMode.MONTH)
+                                CalendarViewMode.MONTH -> {} // already at top level
+                            }
+                            true
+                        }
+                        Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
+                            showSettings = true
+                            true
+                        }
+                        else -> true
+                    }
+                }
+
+                // Header focus: view switcher
+                if (isViewSwitcherFocused) {
+                    return@onKeyEvent when (keyEvent.key) {
+                        Key.DirectionLeft, Key.DirectionUp -> {
+                            isViewSwitcherFocused = false
+                            isSettingsFocused = true
+                            true
+                        }
+                        Key.DirectionRight, Key.DirectionDown -> {
+                            isViewSwitcherFocused = false
+                            if (calendarViewMode == CalendarViewMode.DAY || !hasCalendarScope) {
+                                isDateBarFocused = true
+                            }
+                            true
+                        }
+                        Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
+                            onSwitchPage(0)
+                            true
+                        }
+                        else -> true
+                    }
+                }
+
                 // MONTH mode: encoder navigates days; Enter drills to WEEK
+                // UP from first day of month → header
                 if (calendarViewMode == CalendarViewMode.MONTH) {
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionRight, Key.DirectionDown -> {
                             onSelectDate(selectedDate.plusDays(1)); true
                         }
                         Key.DirectionLeft, Key.DirectionUp -> {
-                            onSelectDate(selectedDate.minusDays(1)); true
+                            if (selectedDate.dayOfMonth == 1) {
+                                isViewSwitcherFocused = true
+                            } else {
+                                onSelectDate(selectedDate.minusDays(1))
+                            }
+                            true
                         }
                         Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
                             onDaySelectedFromGrid(selectedDate)
@@ -203,17 +300,17 @@ fun CalendarScreen(
                     }
                 }
 
-                // WEEK mode: encoder navigates days; Enter drills to DAY; UP past start drills back to MONTH
+                // WEEK mode: encoder navigates days; Enter drills to DAY
+                // UP past start of week → header (then UP past header → MONTH)
                 if (calendarViewMode == CalendarViewMode.WEEK) {
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionRight, Key.DirectionDown -> {
                             onSelectDate(selectedDate.plusDays(1)); true
                         }
                         Key.DirectionLeft, Key.DirectionUp -> {
-                            // If at the start of the week, drill back to MONTH
                             val weekStartDate = selectedDate.with(DayOfWeek.MONDAY)
                             if (selectedDate <= weekStartDate) {
-                                onViewModeChange(CalendarViewMode.MONTH)
+                                isViewSwitcherFocused = true
                             } else {
                                 onSelectDate(selectedDate.minusDays(1))
                             }
@@ -229,13 +326,13 @@ fun CalendarScreen(
                 }
 
                 // THREE_DAY mode: up/down scrolls slots, click activates slot
+                // UP from top-left → header
                 if (calendarViewMode == CalendarViewMode.THREE_DAY) {
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionRight, Key.DirectionDown -> {
                             if (threeDaySlotIndex < threeDaySlotCount - 1) {
                                 threeDaySlotIndex += 1
                             } else if (threeDaySelectedColumn < 2) {
-                                // At bottom of current column, move to next column
                                 threeDaySelectedColumn += 1
                                 threeDaySlotIndex = 0
                             }
@@ -245,18 +342,15 @@ fun CalendarScreen(
                             if (threeDaySlotIndex > 0) {
                                 threeDaySlotIndex -= 1
                             } else if (threeDaySelectedColumn > 0) {
-                                // At top of current column, move to previous column
                                 threeDaySelectedColumn -= 1
                                 threeDaySlotIndex = (threeDaySlotCount - 1).coerceAtLeast(0)
+                            } else {
+                                // At top-left corner — go to header
+                                isViewSwitcherFocused = true
                             }
                             true
                         }
                         Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                            val dayDate = listOf(
-                                selectedDate.minusDays(1),
-                                selectedDate,
-                                selectedDate.plusDays(1)
-                            )[threeDaySelectedColumn]
                             val slot = threeDaySlots.getOrNull(threeDaySelectedColumn)
                                 ?.getOrNull(threeDaySlotIndex)
                             if (slot != null) {
@@ -357,17 +451,14 @@ fun CalendarScreen(
                                     isDateBarFocused = false
                                     isViewSwitcherFocused = true
                                 }
-                            } else if (!isViewSwitcherFocused) {
+                            } else {
                                 isDateBarFocused = true
                             }
                             return@onKeyEvent true
                         }
 
                         Key.DirectionDown, Key.DirectionLeft -> {
-                            if (isViewSwitcherFocused) {
-                                isViewSwitcherFocused = false
-                                isDateBarFocused = true
-                            } else if (isDateBarFocused) {
+                            if (isDateBarFocused) {
                                 if (isEditingDate) {
                                     onSelectDate(selectedDate.minusDays(1))
                                 } else {
@@ -378,9 +469,7 @@ fun CalendarScreen(
                         }
 
                         Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                            if (isViewSwitcherFocused) {
-                                onSwitchPage(0)
-                            } else if (isDateBarFocused) {
+                            if (isDateBarFocused) {
                                 isEditingDate = !isEditingDate
                             } else {
                                 onRequestCalendarAccess()
@@ -391,13 +480,10 @@ fun CalendarScreen(
                     return@onKeyEvent false
                 }
 
+                // DAY mode handler — header focus (settings/viewswitcher) handled above
                 when (keyEvent.key) {
                     Key.DirectionUp, Key.DirectionRight -> {
-                        if (isViewSwitcherFocused) {
-                            // At the very top — drill back to WEEK
-                            onViewModeChange(CalendarViewMode.WEEK)
-                            true
-                        } else if (isDateBarFocused) {
+                        if (isDateBarFocused) {
                             if (isEditingDate) {
                                 onSelectDate(selectedDate.plusDays(1))
                             } else {
@@ -416,11 +502,7 @@ fun CalendarScreen(
                     }
 
                     Key.DirectionDown, Key.DirectionLeft -> {
-                        if (isViewSwitcherFocused) {
-                            isViewSwitcherFocused = false
-                            isDateBarFocused = true
-                            true
-                        } else if (isDateBarFocused) {
+                        if (isDateBarFocused) {
                             if (isEditingDate) {
                                 onSelectDate(selectedDate.minusDays(1))
                             } else {
@@ -442,10 +524,7 @@ fun CalendarScreen(
                     }
 
                     Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                        if (isViewSwitcherFocused) {
-                            onSwitchPage(0)
-                            true
-                        } else if (isDateBarFocused) {
+                        if (isDateBarFocused) {
                             if (isEditingDate) {
                                 // While editing, Enter cycles through available calendars
                                 val writableCalendars = calendars.filter { it.isWritable }
@@ -503,30 +582,37 @@ fun CalendarScreen(
                 lastSyncTime = lastSyncTime,
                 lastSyncSuccess = lastSyncSuccess
             )
-            ViewSwitcherPill(
-                options = listOf(
-                    ViewSwitcherOption(key = "tasks", label = "Tasks"),
-                    ViewSwitcherOption(key = "calendar", label = "Calendar")
-                ),
-                selectedKey = if (currentPage == 0) "tasks" else "calendar",
-                onSelect = { key ->
-                    isViewSwitcherFocused = true
-                    onSwitchPage(if (key == "tasks") 0 else 1)
-                },
+            Row(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 8.dp)
-                    .then(
-                        if (isViewSwitcherFocused) {
-                            Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .border(2.dp, LocalWallColors.current.accentPrimary.copy(alpha = 0.8f), RoundedCornerShape(999.dp))
-                                .padding(2.dp)
-                        } else {
-                            Modifier
-                        }
-                    )
-            )
+                    .padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CalendarSettingsButton(
+                    isFocused = isSettingsFocused,
+                    onClick = { showSettings = true }
+                )
+                ViewSwitcherPill(
+                    options = listOf(
+                        ViewSwitcherOption(key = "tasks", label = "Tasks"),
+                        ViewSwitcherOption(key = "calendar", label = "Calendar")
+                    ),
+                    selectedKey = if (currentPage == 0) "tasks" else "calendar",
+                    onSelect = { key ->
+                        isViewSwitcherFocused = true
+                        onSwitchPage(if (key == "tasks") 0 else 1)
+                    },
+                    modifier = if (isViewSwitcherFocused) {
+                        Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .border(2.dp, LocalWallColors.current.accentPrimary.copy(alpha = 0.8f), RoundedCornerShape(999.dp))
+                            .padding(2.dp)
+                    } else {
+                        Modifier
+                    }
+                )
+            }
         }
 
         DateAndCalendarBar(
@@ -777,7 +863,37 @@ fun CalendarScreen(
             )
         }
     }
+        // Settings overlay
+        if (showSettings) {
+            SettingsPanel(
+                themeMode = themeMode,
+                lightStartHour = lightStartHour,
+                lightEndHour = lightEndHour,
+                sleepStartHour = sleepStartHour,
+                sleepEndHour = sleepEndHour,
+                syncIntervalMinutes = syncIntervalMinutes,
+                onThemeSettingsChange = onThemeSettingsChange,
+                onSleepScheduleChange = onSleepScheduleChange,
+                onSyncIntervalChange = onSyncIntervalChange,
+                geminiKeyPresent = geminiKeyPresent,
+                isValidatingGeminiKey = isValidatingGeminiKey,
+                geminiKeyError = geminiKeyError,
+                onSaveGeminiKey = onSaveGeminiKey,
+                onClearGeminiKey = onClearGeminiKey,
+                weatherLocation = weatherLocation,
+                weatherApiKeyPresent = weatherApiKeyPresent,
+                onSaveWeatherLocation = onSaveWeatherLocation,
+                onSaveWeatherApiKey = onSaveWeatherApiKey,
+                onClearWeatherApiKey = onClearWeatherApiKey,
+                onSearchCities = onSearchCities,
+                onSwitchMode = onSwitchMode,
+                onSignOut = onSignOut,
+                onDismiss = { showSettings = false }
+            )
+        }
     } // end outer Box
+
+    BackHandler(enabled = showSettings) { showSettings = false }
 }
 
 @Composable
@@ -914,5 +1030,33 @@ private fun AccessRequiredCard(
     }
 }
 
+@Composable
+private fun CalendarSettingsButton(isFocused: Boolean, onClick: () -> Unit) {
+    val colors = LocalWallColors.current
+    val shape = RoundedCornerShape(16.dp)
+    val interactionSource = remember { MutableInteractionSource() }
 
+    val backgroundColor by animateColorAsState(
+        targetValue = if (isFocused) colors.surfaceCard.copy(alpha = 0.6f) else colors.surfaceCard.copy(alpha = 0.2f),
+        animationSpec = tween(WallAnimations.SHORT),
+        label = "settingsBg"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(shape)
+            .background(backgroundColor)
+            .border(1.dp, if (isFocused) colors.accentPrimary.copy(alpha = 0.5f) else colors.rimGloss, shape)
+            .clickable(onClick = onClick, interactionSource = interactionSource, indication = null),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Settings,
+            contentDescription = "Settings",
+            tint = if (isFocused) colors.accentPrimary else colors.textSecondary,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
 

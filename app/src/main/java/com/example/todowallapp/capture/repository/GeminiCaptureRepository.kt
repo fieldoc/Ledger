@@ -15,7 +15,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 
 private const val GEMINI_BASE_URL =
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
 
 data class ParsedVoiceTask(
     val title: String,
