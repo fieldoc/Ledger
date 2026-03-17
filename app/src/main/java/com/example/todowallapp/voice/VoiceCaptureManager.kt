@@ -187,7 +187,7 @@ class VoiceCaptureManager(private val context: Context) {
         _state.value = VoiceInputState.Preview(response = response)
     }
 
-    fun showPreviewFallback(rawText: String) {
+    fun showPreviewFallback(rawText: String, clarification: String? = null) {
         showPreview(
             ParsedVoiceResponse(
                 intent = VoiceIntent.ADD,
@@ -202,7 +202,7 @@ class VoiceCaptureManager(private val context: Context) {
                         duplicateOf = null
                     )
                 ),
-                clarification = null,
+                clarification = clarification,
                 rawTranscript = rawText
             )
         )

@@ -243,32 +243,78 @@ fun CalendarDayView(
         )
     } else null
 
-    // Calculate slot height in pixels for drag offset → slot index mapping
-    val slotHeightPx = with(density) { dims.daySlotHeightEmpty.toPx() }
+    // Map each rendered slotItem to its allSlots index (for drag-to-create)
+    val weatherItemCount = if (weatherForecast.containsKey(date)) 1 else 0
+    val slotItemToAllSlotsIdx = remember(slotItems, allSlots) {
+        slotItems.map { item ->
+            when (item) {
+                is CalendarSlotItem.SingleSlot ->
+                    allSlots.indexOfFirst { it.start == item.slot.start }
+                is CalendarSlotItem.CompressedRange ->
+                    allSlots.indexOfFirst { it.start == item.startTime }
+            }
+        }
+    }
 
     LazyColumn(
         state = listState,
         modifier = modifier
-            .pointerInput(allSlots, slotHeightPx) {
+            .pointerInput(allSlots, slotItemToAllSlotsIdx, weatherItemCount) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { offset ->
-                        // Calculate which slot the long-press started on
-                        val idx = (offset.y / (slotHeightPx + 2f)).toInt()
-                            .coerceIn(0, allSlots.lastIndex)
-                        dragStartSlotIdx = idx
-                        dragCurrentSlotIdx = idx
+                        // Use layout info for scroll-aware, weather-strip-aware hit testing
+                        val hitItem = listState.layoutInfo.visibleItemsInfo.find { item ->
+                            offset.y >= item.offset && offset.y < item.offset + item.size
+                        }
+                        if (hitItem != null) {
+                            val slotItemIdx = hitItem.index - weatherItemCount
+                            if (slotItemIdx in slotItemToAllSlotsIdx.indices) {
+                                val idx = slotItemToAllSlotsIdx[slotItemIdx]
+                                if (idx in allSlots.indices) {
+                                    dragStartSlotIdx = idx
+                                    dragCurrentSlotIdx = idx
+                                }
+                            }
+                        }
                     },
                     onDrag = { change, _ ->
                         change.consume()
-                        // Map current Y position to slot index
-                        val idx = (change.position.y / (slotHeightPx + 2f)).toInt()
-                            .coerceIn(0, allSlots.lastIndex)
-                        dragCurrentSlotIdx = idx
+                        val visibleSlots = listState.layoutInfo.visibleItemsInfo
+                            .filter { it.index >= weatherItemCount }
+                        val hitItem = visibleSlots.find { item ->
+                            change.position.y >= item.offset &&
+                                change.position.y < item.offset + item.size
+                        }
+                        val rawIdx = when {
+                            hitItem != null -> hitItem.index - weatherItemCount
+                            visibleSlots.isNotEmpty() &&
+                                change.position.y < visibleSlots.first().offset ->
+                                visibleSlots.first().index - weatherItemCount
+                            visibleSlots.isNotEmpty() ->
+                                visibleSlots.last().index - weatherItemCount
+                            else -> -1
+                        }
+                        if (rawIdx in slotItemToAllSlotsIdx.indices) {
+                            val idx = slotItemToAllSlotsIdx[rawIdx]
+                            if (idx >= 0) {
+                                dragCurrentSlotIdx = idx.coerceIn(0, allSlots.lastIndex)
+                            }
+                        }
                     },
                     onDragEnd = {
-                        val range = dragRange
-                        if (range != null && range.durationMinutes >= 30) {
-                            onSlotRangeSelected(range)
+                        // Read state directly — composed dragRange is stale inside pointerInput
+                        val startIdx = dragStartSlotIdx
+                        val endIdx = dragCurrentSlotIdx
+                        if (startIdx in allSlots.indices && endIdx in allSlots.indices) {
+                            val minIdx = minOf(startIdx, endIdx)
+                            val maxIdx = maxOf(startIdx, endIdx)
+                            val range = SlotDragRange(
+                                startTime = allSlots[minIdx].start,
+                                endTime = allSlots[maxIdx].start.plusMinutes(30)
+                            )
+                            if (range.durationMinutes >= 30) {
+                                onSlotRangeSelected(range)
+                            }
                         }
                         dragStartSlotIdx = -1
                         dragCurrentSlotIdx = -1

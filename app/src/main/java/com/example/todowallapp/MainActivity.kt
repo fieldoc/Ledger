@@ -525,7 +525,7 @@ private fun WallModeContent(
                 1 -> {
                     CalendarScreen(
                         selectedDate = uiState.selectedCalendarDate,
-                        events = uiState.calendarEvents,
+                        events = uiState.eventsForRange[uiState.selectedCalendarDate] ?: emptyList(),
                         calendars = uiState.calendars,
                         selectedCalendarId = uiState.selectedCalendarId,
                         hasCalendarScope = uiState.hasCalendarScope,

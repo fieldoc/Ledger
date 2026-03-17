@@ -115,7 +115,7 @@ fun CalendarMonthView(
                             isSelected = date == selectedDate,
                             isToday = date == today,
                             events = eventsForRange[date].orEmpty(),
-                            weatherTint = weatherForecast[date]?.tintColor ?: Color.Transparent,
+                            weatherTint = weatherForecast[date]?.tintColor(colors.isDark) ?: Color.Transparent,
                             onDaySelected = onDaySelected,
                             modifier = Modifier
                                 .weight(1f)
