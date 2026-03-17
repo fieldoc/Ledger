@@ -929,7 +929,8 @@ fun TaskWallScreen(
                     isAmbientMode = isAmbientMode,
                     isOnline = isOnline,
                     lastSyncTime = lastSyncTime,
-                    lastSyncSuccess = lastSyncSuccess
+                    lastSyncSuccess = lastSyncSuccess,
+                    onSyncClick = onRefresh
                 )
 
                 Row(

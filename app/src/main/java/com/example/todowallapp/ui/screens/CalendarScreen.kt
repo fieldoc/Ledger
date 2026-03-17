@@ -138,6 +138,7 @@ fun CalendarScreen(
     onSearchCities: (suspend (String) -> List<String>) = { emptyList() },
     onSwitchMode: () -> Unit = {},
     onSignOut: () -> Unit = {},
+    onRefresh: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -580,7 +581,8 @@ fun CalendarScreen(
                 isAmbientMode = false,
                 isOnline = isOnline,
                 lastSyncTime = lastSyncTime,
-                lastSyncSuccess = lastSyncSuccess
+                lastSyncSuccess = lastSyncSuccess,
+                onSyncClick = onRefresh
             )
             Row(
                 modifier = Modifier

@@ -7,6 +7,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,6 +55,7 @@ fun ClockHeader(
     isOnline: Boolean = true,
     lastSyncTime: LocalDateTime? = null,
     lastSyncSuccess: Boolean? = null,
+    onSyncClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var currentTime by remember { mutableStateOf(LocalDateTime.now()) }
@@ -134,7 +137,16 @@ fun ClockHeader(
                         fontWeight = FontWeight.SemiBold
                     )
                     if (!isAmbientMode && syncText != null) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = if (onSyncClick != null) {
+                                Modifier.clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = onSyncClick
+                                )
+                            } else Modifier
+                        ) {
                             Box(
                                 modifier = Modifier
                                     .size(6.dp)

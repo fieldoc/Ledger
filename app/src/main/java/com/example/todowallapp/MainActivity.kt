@@ -603,6 +603,7 @@ private fun WallModeContent(
                         },
                         onSwitchMode = onSwitchMode,
                         onSignOut = viewModel::signOut,
+                        onRefresh = viewModel::refresh,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
