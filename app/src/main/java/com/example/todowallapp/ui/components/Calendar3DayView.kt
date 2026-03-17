@@ -126,8 +126,8 @@ fun Calendar3DayView(
         // Slot index within the half-hour grid (0-based from startHour=7)
         val currentSlotIdx = ((currentTime.hour - 7) * 2 + currentTime.minute / 30)
             .coerceIn(0, slotCount - 1)
-        // +1 for the header item, -2 to show ~1 hour of past above
-        listState.scrollToItem(maxOf(0, currentSlotIdx + 1 - 2))
+        // -2 to show ~1 hour of past above current time
+        listState.scrollToItem(maxOf(0, currentSlotIdx - 2))
     }
 
     val dragRange: SlotDragRange? = if (isDragging && dragDayColumn in daySlots.indices) {
@@ -150,212 +150,208 @@ fun Calendar3DayView(
     var headerHeightPx by remember { mutableIntStateOf(0) }
     var totalWidthPx by remember { mutableIntStateOf(0) }
 
-    LazyColumn(
-        state = listState,
-        modifier = modifier
-            .fillMaxSize()
-            .onSizeChanged { totalWidthPx = it.width }
-            .pointerInput(daySlots, timeColumnWidthPx, totalWidthPx) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { offset ->
-                        if (totalWidthPx <= 0) return@detectDragGesturesAfterLongPress
-                        // Map X to day column (0, 1, 2)
-                        val columnAreaWidth = (totalWidthPx - timeColumnWidthPx) / 3f
-                        val xInColumns = offset.x - timeColumnWidthPx
-                        val col = if (xInColumns < 0) -1
-                            else (xInColumns / columnAreaWidth).toInt().coerceIn(0, 2)
-                        // Map Y to slot index using layout info (scroll-aware)
-                        val hitItem = listState.layoutInfo.visibleItemsInfo.find { item ->
-                            offset.y >= item.offset && offset.y < item.offset + item.size
-                        }
-                        // index 0 = header row, slot items start at index 1
-                        val idx = if (hitItem != null && hitItem.index > 0) {
-                            (hitItem.index - 1).coerceIn(0, slotCount - 1)
-                        } else -1
-                        if (col in 0..2 && idx >= 0) {
-                            dragDayColumn = col
-                            dragStartSlotIdx = idx
-                            dragCurrentSlotIdx = idx
-                        }
-                    },
-                    onDrag = { change, _ ->
-                        change.consume()
-                        val visibleSlots = listState.layoutInfo.visibleItemsInfo
-                            .filter { it.index > 0 }
-                        val hitItem = visibleSlots.find { item ->
-                            change.position.y >= item.offset &&
-                                change.position.y < item.offset + item.size
-                        }
-                        val idx = when {
-                            hitItem != null -> hitItem.index - 1
-                            visibleSlots.isNotEmpty() &&
-                                change.position.y < visibleSlots.first().offset ->
-                                visibleSlots.first().index - 1
-                            visibleSlots.isNotEmpty() ->
-                                visibleSlots.last().index - 1
-                            else -> dragCurrentSlotIdx
-                        }
-                        dragCurrentSlotIdx = idx.coerceIn(0, slotCount - 1)
-                    },
-                    onDragEnd = {
-                        // Read state directly — composed dragRange is stale inside pointerInput
-                        val startIdx = dragStartSlotIdx
-                        val endIdx = dragCurrentSlotIdx
-                        val dayCol = dragDayColumn
-                        if (startIdx >= 0 && endIdx >= 0 && dayCol in daySlots.indices) {
-                            val daySlotList = daySlots[dayCol]
-                            if (startIdx in daySlotList.indices && endIdx in daySlotList.indices) {
-                                val minIdx = minOf(startIdx, endIdx)
-                                val maxIdx = maxOf(startIdx, endIdx)
-                                val range = SlotDragRange(
-                                    startTime = daySlotList[minIdx].start,
-                                    endTime = daySlotList[maxIdx].start.plusMinutes(30)
-                                )
-                                if (range.durationMinutes >= 30) {
-                                    onSlotRangeSelected(range)
-                                }
+    Column(modifier = modifier.fillMaxSize().onSizeChanged { totalWidthPx = it.width }) {
+        // Frozen day headers — always visible above the scrollable time slots
+        Row(modifier = Modifier
+            .fillMaxWidth()
+            .onSizeChanged { headerHeightPx = it.height }
+        ) {
+            // Time column placeholder (aligns with the time labels below)
+            Spacer(modifier = Modifier.width(dims.dayTimeColumnWidth))
+
+            days.forEachIndexed { dayIdx, date ->
+                val isToday = date == LocalDate.now()
+                val isSelectedDay = dayIdx == selectedDayOffset
+                val weatherCondition = weatherForecast[date]
+                val weatherTint = weatherCondition?.tintColor(colors.isDark) ?: Color.Transparent
+                val maxHeaderAlpha = if (colors.isDark) 0.25f else 0.12f
+                val headerBg = if (weatherTint != Color.Transparent) {
+                    weatherTint.copy(alpha = (weatherTint.alpha * 2f).coerceAtMost(maxHeaderAlpha))
+                } else {
+                    Color.Transparent
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 2.dp, vertical = 4.dp)
+                        .background(headerBg, RoundedCornerShape(6.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when {
+                                isToday -> colors.accentPrimary
+                                isSelectedDay -> colors.textPrimary
+                                else -> colors.textMuted
                             }
-                        }
-                        dragStartSlotIdx = -1
-                        dragCurrentSlotIdx = -1
-                        dragDayColumn = -1
-                    },
-                    onDragCancel = {
-                        dragStartSlotIdx = -1
-                        dragCurrentSlotIdx = -1
-                        dragDayColumn = -1
-                    }
-                )
-            },
-        userScrollEnabled = !isDragging,
-        verticalArrangement = Arrangement.spacedBy(1.dp)
-    ) {
-        // Day headers row
-        item(key = "headers") {
-            Row(modifier = Modifier
-                .fillMaxWidth()
-                .onSizeChanged { headerHeightPx = it.height }
-            ) {
-                // Time column placeholder
-                Spacer(modifier = Modifier.width(dims.dayTimeColumnWidth))
-
-                days.forEachIndexed { dayIdx, date ->
-                    val isToday = date == LocalDate.now()
-                    val isSelectedDay = dayIdx == selectedDayOffset
-                    val weatherCondition = weatherForecast[date]
-                    val weatherTint = weatherCondition?.tintColor(colors.isDark) ?: Color.Transparent
-                    val maxHeaderAlpha = if (colors.isDark) 0.25f else 0.12f
-                    val headerBg = if (weatherTint != Color.Transparent) {
-                        weatherTint.copy(alpha = (weatherTint.alpha * 2f).coerceAtMost(maxHeaderAlpha))
-                    } else {
-                        Color.Transparent
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 2.dp, vertical = 4.dp)
-                            .background(headerBg, RoundedCornerShape(6.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        )
+                        Text(
+                            text = date.dayOfMonth.toString(),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                            color = when {
+                                isToday -> colors.accentPrimary
+                                isSelectedDay -> colors.textPrimary
+                                else -> colors.textSecondary
+                            }
+                        )
+                        if (weatherCondition != null && weatherCondition != WeatherCondition.PARTLY_CLOUDY) {
                             Text(
-                                text = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()),
+                                text = weatherCondition.icon,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = when {
-                                    isToday -> colors.accentPrimary
-                                    isSelectedDay -> colors.textPrimary
-                                    else -> colors.textMuted
-                                }
+                                modifier = Modifier.padding(top = 1.dp)
                             )
-                            Text(
-                                text = date.dayOfMonth.toString(),
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                                color = when {
-                                    isToday -> colors.accentPrimary
-                                    isSelectedDay -> colors.textPrimary
-                                    else -> colors.textSecondary
-                                }
+                        }
+                        if (isToday) {
+                            Box(
+                                modifier = Modifier
+                                    .padding(top = 2.dp)
+                                    .width(14.dp)
+                                    .height(2.dp)
+                                    .background(
+                                        colors.accentPrimary.copy(alpha = 0.6f),
+                                        RoundedCornerShape(999.dp)
+                                    )
                             )
-                            if (weatherCondition != null && weatherCondition != WeatherCondition.PARTLY_CLOUDY) {
-                                Text(
-                                    text = weatherCondition.icon,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.padding(top = 1.dp)
-                                )
-                            }
-                            if (isToday) {
-                                Box(
-                                    modifier = Modifier
-                                        .padding(top = 2.dp)
-                                        .width(14.dp)
-                                        .height(2.dp)
-                                        .background(
-                                            colors.accentPrimary.copy(alpha = 0.6f),
-                                            RoundedCornerShape(999.dp)
-                                        )
-                                )
-                            }
                         }
                     }
                 }
             }
         }
 
-        // Slot rows — one per half-hour
-        items(
-            count = slotCount,
-            key = { idx -> "slot_$idx" }
-        ) { slotIdx ->
-            val timeSlot = daySlots[0][slotIdx]
-            val slotTime = timeSlot.start
-            val slotHeight = dims.daySlotHeightEmpty
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(slotHeight),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Shared time label
-                Text(
-                    text = slotTime.format(ThreeDayTimeFormatter),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.textMuted,
-                    modifier = Modifier
-                        .width(dims.dayTimeColumnWidth)
-                        .padding(end = 4.dp)
-                )
-
-                // 3 day columns
-                days.forEachIndexed { dayIdx, date ->
-                    val slot = daySlots[dayIdx][slotIdx]
-                    val hasEvents = slot.events.isNotEmpty()
-                    val isSelected = dayIdx == selectedDayOffset && slotIdx == selectedSlotIndex
-                    val slotStart = slot.start
-                    val slotEnd = slotStart.plusMinutes(30)
-                    val hasNow = date == now.toLocalDate() && now >= slotStart && now < slotEnd
-
-                    val slotInDragRange = dragDayColumn == dayIdx && dragRange?.let { range ->
-                        val slotEnd = slot.start.plusMinutes(30)
-                        slot.start < range.endTime && slotEnd > range.startTime
-                    } == true
-
-                    ThreeDaySlotCell(
-                        slot = slot,
-                        isSelected = isSelected,
-                        isInDragRange = slotInDragRange,
-                        hasNow = hasNow,
-                        selectedEventId = if (dayIdx == selectedDayOffset) selectedEventId else null,
-                        taskUrgencyByTaskId = taskUrgencyByTaskId,
-                        onSlotActivated = { onSlotActivated(date, slot.start) },
-                        onEventActivated = onEventActivated,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .padding(horizontal = 1.dp)
+        // Scrollable time slots
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(daySlots, timeColumnWidthPx, totalWidthPx) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { offset ->
+                            if (totalWidthPx <= 0) return@detectDragGesturesAfterLongPress
+                            val columnAreaWidth = (totalWidthPx - timeColumnWidthPx) / 3f
+                            val xInColumns = offset.x - timeColumnWidthPx
+                            val col = if (xInColumns < 0) -1
+                                else (xInColumns / columnAreaWidth).toInt().coerceIn(0, 2)
+                            val hitItem = listState.layoutInfo.visibleItemsInfo.find { item ->
+                                offset.y >= item.offset && offset.y < item.offset + item.size
+                            }
+                            // Slots start at index 0 (no header item in the list)
+                            val idx = if (hitItem != null) {
+                                hitItem.index.coerceIn(0, slotCount - 1)
+                            } else -1
+                            if (col in 0..2 && idx >= 0) {
+                                dragDayColumn = col
+                                dragStartSlotIdx = idx
+                                dragCurrentSlotIdx = idx
+                            }
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            val visibleSlots = listState.layoutInfo.visibleItemsInfo
+                            val hitItem = visibleSlots.find { item ->
+                                change.position.y >= item.offset &&
+                                    change.position.y < item.offset + item.size
+                            }
+                            val idx = when {
+                                hitItem != null -> hitItem.index
+                                visibleSlots.isNotEmpty() &&
+                                    change.position.y < visibleSlots.first().offset ->
+                                    visibleSlots.first().index
+                                visibleSlots.isNotEmpty() ->
+                                    visibleSlots.last().index
+                                else -> dragCurrentSlotIdx
+                            }
+                            dragCurrentSlotIdx = idx.coerceIn(0, slotCount - 1)
+                        },
+                        onDragEnd = {
+                            val startIdx = dragStartSlotIdx
+                            val endIdx = dragCurrentSlotIdx
+                            val dayCol = dragDayColumn
+                            if (startIdx >= 0 && endIdx >= 0 && dayCol in daySlots.indices) {
+                                val daySlotList = daySlots[dayCol]
+                                if (startIdx in daySlotList.indices && endIdx in daySlotList.indices) {
+                                    val minIdx = minOf(startIdx, endIdx)
+                                    val maxIdx = maxOf(startIdx, endIdx)
+                                    val range = SlotDragRange(
+                                        startTime = daySlotList[minIdx].start,
+                                        endTime = daySlotList[maxIdx].start.plusMinutes(30)
+                                    )
+                                    if (range.durationMinutes >= 30) {
+                                        onSlotRangeSelected(range)
+                                    }
+                                }
+                            }
+                            dragStartSlotIdx = -1
+                            dragCurrentSlotIdx = -1
+                            dragDayColumn = -1
+                        },
+                        onDragCancel = {
+                            dragStartSlotIdx = -1
+                            dragCurrentSlotIdx = -1
+                            dragDayColumn = -1
+                        }
                     )
+                },
+            userScrollEnabled = !isDragging,
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            // Slot rows — one per half-hour
+            items(
+                count = slotCount,
+                key = { idx -> "slot_$idx" }
+            ) { slotIdx ->
+                val timeSlot = daySlots[0][slotIdx]
+                val slotTime = timeSlot.start
+                val slotHeight = dims.daySlotHeightEmpty
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(slotHeight),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Shared time label
+                    Text(
+                        text = slotTime.format(ThreeDayTimeFormatter),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textMuted,
+                        modifier = Modifier
+                            .width(dims.dayTimeColumnWidth)
+                            .padding(end = 4.dp)
+                    )
+
+                    // 3 day columns
+                    days.forEachIndexed { dayIdx, date ->
+                        val slot = daySlots[dayIdx][slotIdx]
+                        val hasEvents = slot.events.isNotEmpty()
+                        val isSelected = dayIdx == selectedDayOffset && slotIdx == selectedSlotIndex
+                        val slotStart = slot.start
+                        val slotEnd = slotStart.plusMinutes(30)
+                        val hasNow = date == now.toLocalDate() && now >= slotStart && now < slotEnd
+
+                        val slotInDragRange = dragDayColumn == dayIdx && dragRange?.let { range ->
+                            val slotEnd = slot.start.plusMinutes(30)
+                            slot.start < range.endTime && slotEnd > range.startTime
+                        } == true
+
+                        ThreeDaySlotCell(
+                            slot = slot,
+                            isSelected = isSelected,
+                            isInDragRange = slotInDragRange,
+                            hasNow = hasNow,
+                            selectedEventId = if (dayIdx == selectedDayOffset) selectedEventId else null,
+                            taskUrgencyByTaskId = taskUrgencyByTaskId,
+                            onSlotActivated = { onSlotActivated(date, slot.start) },
+                            onEventActivated = onEventActivated,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .padding(horizontal = 1.dp)
+                        )
+                    }
                 }
             }
         }

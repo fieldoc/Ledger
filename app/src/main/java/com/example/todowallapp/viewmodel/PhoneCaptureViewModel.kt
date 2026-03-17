@@ -262,10 +262,16 @@ class PhoneCaptureViewModel(
 
     fun showVoiceSheet() {
         _uiState.value = _uiState.value.copy(showVoiceSheet = true)
+        // Immediately start listening — no redundant "Start Listening" tap
+        voiceParsingCoordinator.cancelParse()
+        voiceParsingCoordinator.clearMetadata()
+        voiceCaptureManager.startListening()
     }
 
     fun hideVoiceSheet() {
-        voiceCaptureManager.resetToIdle()
+        voiceParsingCoordinator.cancelParse()
+        voiceParsingCoordinator.clearMetadata()
+        voiceCaptureManager.cancel()
         _uiState.value = _uiState.value.copy(showVoiceSheet = false)
     }
 
@@ -284,6 +290,7 @@ class PhoneCaptureViewModel(
     }
 
     fun dismissVoiceError() {
+        voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.resetToIdle()
     }
 
