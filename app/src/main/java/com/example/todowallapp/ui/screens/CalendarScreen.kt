@@ -137,10 +137,11 @@ fun CalendarScreen(
     // 3-day view state
     var threeDaySelectedColumn by remember { mutableIntStateOf(1) } // 0=yesterday, 1=today, 2=tomorrow
     var threeDaySlotIndex by remember(selectedDate) { mutableIntStateOf(0) }
-    val threeDaySlots = remember(selectedDate, events) {
+    val threeDayAllEvents = remember(eventsForRange) { eventsForRange.values.flatten() }
+    val threeDaySlots = remember(selectedDate, threeDayAllEvents) {
         val days = listOf(selectedDate.minusDays(1), selectedDate, selectedDate.plusDays(1))
         days.map { date ->
-            val dayEvents = events.filter { it.occursOn(date) }
+            val dayEvents = threeDayAllEvents.filter { it.occursOn(date) }
             buildHalfHourSlots(date, dayEvents)
         }
     }
@@ -619,7 +620,7 @@ fun CalendarScreen(
                         )
                         CalendarViewMode.THREE_DAY -> Calendar3DayView(
                             centerDate = selectedDate,
-                            allEvents = events,
+                            allEvents = eventsForRange.values.flatten(),
                             selectedDayOffset = threeDaySelectedColumn,
                             selectedSlotIndex = threeDaySlotIndex,
                             selectedEventId = selectedEventId,

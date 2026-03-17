@@ -23,7 +23,6 @@ import com.example.todowallapp.data.model.PromotionDraft
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskList
 import com.example.todowallapp.data.model.TaskListWithTasks
-import com.example.todowallapp.data.model.buildScheduleMapForDate
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.data.repository.GoogleCalendarRepository
@@ -72,8 +71,6 @@ data class TaskWallUiState(
     val selectedCalendarDate: LocalDate = LocalDate.now(),
     val selectedCalendarId: String = GoogleCalendarRepository.PRIMARY_CALENDAR_ID,
     val calendars: List<GoogleCalendar> = emptyList(),
-    val calendarEvents: List<CalendarEvent> = emptyList(),
-    val calendarScheduleMap: Map<Int, List<CalendarEvent>> = emptyMap(),
     val isCalendarLoading: Boolean = false,
     val calendarError: String? = null,
     val hasCalendarScope: Boolean = false,
@@ -336,8 +333,7 @@ class TaskWallViewModel(
                 } else {
                     _uiState.update { it.copy(
                         calendars = emptyList(),
-                        calendarEvents = emptyList(),
-                        calendarScheduleMap = emptyMap(),
+                        eventsForRange = emptyMap(),
                         calendarError = "Calendar access needed - press Enter to grant"
                     ) }
                 }
@@ -520,7 +516,7 @@ class TaskWallViewModel(
                     val tasksDeferred = async { loadTaskLists(selectedTaskListId) }
                     val calendarDeferred = async {
                         if (hasCalendarScope) {
-                            loadCalendarForDateInternal(selectedCalendarDate)
+                            loadCalendarRangeInternal(_uiState.value.calendarViewMode, selectedCalendarDate)
                         } else {
                             true
                         }
@@ -878,7 +874,7 @@ class TaskWallViewModel(
                             scheduledTaskTimes = updatedTimes
                         )
                     }
-                    loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
+                    loadCalendarRangeInternal(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
                 },
                 onFailure = { error ->
                     val message = error.message?.let { ": $it" } ?: ""
@@ -903,37 +899,19 @@ class TaskWallViewModel(
         viewModelScope.launch {
             _uiState.update { it.copy(selectedCalendarDate = date) }
             persistSelectedCalendarDate(date)
-            val mode = _uiState.value.calendarViewMode
-            when (mode) {
-                CalendarViewMode.DAY -> loadCalendarForDateInternal(date)
-                CalendarViewMode.THREE_DAY -> {
-                    loadCalendarForDateInternal(date)
-                    loadCalendarRange(mode, date)
-                }
-                else -> loadCalendarRange(mode, date)
-            }
+            loadCalendarRangeInternal(_uiState.value.calendarViewMode, date)
         }
     }
 
     fun selectCalendar(calendarId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(selectedCalendarId = calendarId) }
-            val mode = _uiState.value.calendarViewMode
-            when (mode) {
-                CalendarViewMode.DAY -> loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
-                CalendarViewMode.THREE_DAY -> {
-                    loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
-                    loadCalendarRange(mode, _uiState.value.selectedCalendarDate)
-                }
-                else -> loadCalendarRange(mode, _uiState.value.selectedCalendarDate)
-            }
+            loadCalendarRangeInternal(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
         }
     }
 
     fun loadCalendarForSelectedDate() {
-        viewModelScope.launch {
-            loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
-        }
+        loadCalendarRange(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
     }
 
     fun setCalendarViewMode(mode: CalendarViewMode) {
@@ -942,58 +920,88 @@ class TaskWallViewModel(
     }
 
     private fun loadCalendarRange(mode: CalendarViewMode, anchor: LocalDate) {
-        if (mode == CalendarViewMode.DAY) return  // DAY uses existing per-date flow
+        viewModelScope.launch { loadCalendarRangeInternal(mode, anchor) }
+    }
 
-        viewModelScope.launch {
-            if (!_uiState.value.hasCalendarScope) return@launch
-            _uiState.update { it.copy(isCalendarLoading = true, calendarError = null) }
-            val calendarId = _uiState.value.selectedCalendarId
+    private suspend fun loadCalendarRangeInternal(mode: CalendarViewMode, anchor: LocalDate): Boolean {
+        if (_uiState.value.authState !is AuthState.Authenticated) return false
+        if (!_uiState.value.hasCalendarScope) return false
+        _uiState.update { it.copy(isCalendarLoading = true, calendarError = null) }
+        val calendarId = _uiState.value.selectedCalendarId
 
-            val (start, end) = when (mode) {
-                CalendarViewMode.MONTH -> {
-                    val firstOfMonth = anchor.withDayOfMonth(1)
-                    val gridStart = firstOfMonth.with(
-                        java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.SUNDAY)
-                    )
-                    val lastOfMonth = firstOfMonth.with(
-                        java.time.temporal.TemporalAdjusters.lastDayOfMonth()
-                    )
-                    val gridEnd = lastOfMonth.with(
-                        java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.SATURDAY)
-                    )
-                    Pair(gridStart, gridEnd)
-                }
-                CalendarViewMode.WEEK -> {
-                    val today = LocalDate.now()
-                    Pair(today, today.plusDays(6))
-                }
-                CalendarViewMode.THREE_DAY -> {
-                    Pair(anchor.minusDays(1), anchor.plusDays(1))
-                }
-                else -> return@launch
+        val (start, end) = when (mode) {
+            CalendarViewMode.MONTH -> {
+                val firstOfMonth = anchor.withDayOfMonth(1)
+                val gridStart = firstOfMonth.with(
+                    java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.SUNDAY)
+                )
+                val lastOfMonth = firstOfMonth.with(
+                    java.time.temporal.TemporalAdjusters.lastDayOfMonth()
+                )
+                val gridEnd = lastOfMonth.with(
+                    java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.SATURDAY)
+                )
+                Pair(gridStart, gridEnd)
             }
+            CalendarViewMode.WEEK -> {
+                val today = LocalDate.now()
+                Pair(today, today.plusDays(6))
+            }
+            CalendarViewMode.THREE_DAY -> {
+                Pair(anchor.minusDays(1), anchor.plusDays(1))
+            }
+            CalendarViewMode.DAY -> {
+                Pair(anchor, anchor)
+            }
+        }
 
-            _uiState.update { it.copy(calendarRangeStart = start) }
+        _uiState.update { it.copy(calendarRangeStart = start) }
 
-            calendarRepository.getEventsForDateRange(start, end, calendarId)
-                .onSuccess { grouped ->
-                    _uiState.update { it.copy(
+        return calendarRepository.getEventsForDateRange(start, end, calendarId).fold(
+            onSuccess = { grouped ->
+                val allEvents = grouped.values.flatten()
+                val promotedEventIdsByTask = allEvents
+                    .asSequence()
+                    .filter { it.isPromotedTask && !it.sourceTaskId.isNullOrBlank() }
+                    .associate { it.sourceTaskId!! to it.id }
+                val promotedStartTimesByTask = allEvents
+                    .asSequence()
+                    .filter { it.isPromotedTask && !it.sourceTaskId.isNullOrBlank() }
+                    .mapNotNull { event ->
+                        val taskId = event.sourceTaskId ?: return@mapNotNull null
+                        val startTime = event.startDateTime ?: event.allDayStartDate?.atStartOfDay() ?: return@mapNotNull null
+                        taskId to startTime
+                    }
+                    .toMap()
+                _uiState.update { state ->
+                    val mergedEventIds = state.scheduledTaskEventIds.toMutableMap().apply {
+                        putAll(promotedEventIdsByTask)
+                    }
+                    val mergedStartTimes = state.scheduledTaskTimes.toMutableMap().apply {
+                        putAll(promotedStartTimesByTask)
+                    }
+                    state.copy(
                         eventsForRange = grouped,
+                        scheduledTaskEventIds = mergedEventIds,
+                        scheduledTaskTimes = mergedStartTimes,
                         isCalendarLoading = false,
                         calendarError = null
+                    )
+                }
+                true
+            },
+            onFailure = { error ->
+                if (isCalendarForbidden(error)) {
+                    handleCalendarForbidden(error)
+                } else {
+                    _uiState.update { it.copy(
+                        isCalendarLoading = false,
+                        calendarError = error.message
                     ) }
                 }
-                .onFailure { error ->
-                    if (isCalendarForbidden(error)) {
-                        handleCalendarForbidden(error)
-                    } else {
-                        _uiState.update { it.copy(
-                            isCalendarLoading = false,
-                            calendarError = error.message
-                        ) }
-                    }
-                }
-        }
+                false
+            }
+        )
     }
 
     fun openPromotionDraft(
@@ -1113,7 +1121,7 @@ class TaskWallViewModel(
 
             result.fold(
                 onSuccess = { event ->
-                    loadCalendarForDateInternal(_uiState.value.selectedCalendarDate)
+                    loadCalendarRangeInternal(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
                     _uiState.update { state ->
                         val updatedScheduleMap = state.scheduledTaskEventIds.toMutableMap()
                         updatedScheduleMap[draft.task.id] = event.id
@@ -1248,78 +1256,6 @@ class TaskWallViewModel(
         return baseDelay * backoffMultiplier
     }
 
-    private suspend fun loadCalendarForDateInternal(date: LocalDate): Boolean {
-        if (_uiState.value.authState !is AuthState.Authenticated) return false
-        if (!_uiState.value.hasCalendarScope) {
-            _uiState.update { it.copy(
-                selectedCalendarDate = date,
-                calendars = emptyList(),
-                calendarEvents = emptyList(),
-                calendarScheduleMap = emptyMap(),
-                isCalendarLoading = false,
-                calendarError = "Calendar access needed - press Enter to grant"
-            ) }
-            return false
-        }
-
-        _uiState.update { it.copy(
-            selectedCalendarDate = date,
-            isCalendarLoading = true,
-            calendarError = null
-        ) }
-
-        return calendarRepository.getEventsForDate(
-            date = date,
-            calendarId = _uiState.value.selectedCalendarId
-        ).fold(
-            onSuccess = { events ->
-                val promotedEventIdsByTask = events
-                    .asSequence()
-                    .filter { it.isPromotedTask && !it.sourceTaskId.isNullOrBlank() }
-                    .associate { event -> event.sourceTaskId!! to event.id }
-                val promotedStartTimesByTask = events
-                    .asSequence()
-                    .filter { it.isPromotedTask && !it.sourceTaskId.isNullOrBlank() }
-                    .mapNotNull { event ->
-                        val taskId = event.sourceTaskId ?: return@mapNotNull null
-                        val start = event.startDateTime ?: event.allDayStartDate?.atStartOfDay() ?: return@mapNotNull null
-                        taskId to start
-                    }
-                    .toMap()
-                _uiState.update { state ->
-                    val mergedEventIds = state.scheduledTaskEventIds.toMutableMap().apply {
-                        putAll(promotedEventIdsByTask)
-                    }
-                    val mergedStartTimes = state.scheduledTaskTimes.toMutableMap().apply {
-                        putAll(promotedStartTimesByTask)
-                    }
-                    state.copy(
-                        calendarEvents = events,
-                        calendarScheduleMap = buildScheduleMapForDate(events, date),
-                        scheduledTaskEventIds = mergedEventIds,
-                        scheduledTaskTimes = mergedStartTimes,
-                        isCalendarLoading = false,
-                        calendarError = null
-                    )
-                }
-                true
-            },
-            onFailure = { error ->
-                if (isCalendarForbidden(error)) {
-                    handleCalendarForbidden(error)
-                    return@fold false
-                }
-                val message = error.message?.let { ": $it" } ?: ""
-                _uiState.update { it.copy(
-                    calendarEvents = emptyList(),
-                    calendarScheduleMap = emptyMap(),
-                    isCalendarLoading = false,
-                    calendarError = "Failed to load calendar${message}"
-                ) }
-                false
-            }
-        )
-    }
 
     private suspend fun loadCalendars() {
         calendarRepository.getCalendars().fold(
@@ -1394,8 +1330,7 @@ class TaskWallViewModel(
             _uiState.update { it.copy(
                 hasCalendarScope = false,
                 calendars = emptyList(),
-                calendarEvents = emptyList(),
-                calendarScheduleMap = emptyMap(),
+                eventsForRange = emptyMap(),
                 promotionDraft = null,
                 isCalendarLoading = false,
                 calendarError = "Calendar access needed - press Enter to grant"
