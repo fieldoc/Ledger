@@ -155,7 +155,7 @@ fun Calendar3DayView(
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { totalWidthPx = it.width }
-            .pointerInput(daySlots, slotStepPx, timeColumnWidthPx, totalWidthPx) {
+            .pointerInput(daySlots, timeColumnWidthPx, totalWidthPx) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { offset ->
                         if (totalWidthPx <= 0) return@detectDragGesturesAfterLongPress
@@ -164,11 +164,15 @@ fun Calendar3DayView(
                         val xInColumns = offset.x - timeColumnWidthPx
                         val col = if (xInColumns < 0) -1
                             else (xInColumns / columnAreaWidth).toInt().coerceIn(0, 2)
-                        // Map Y to slot index, accounting for header
-                        val yBelowHeader = offset.y - headerHeightPx
-                        val idx = (yBelowHeader / slotStepPx).toInt()
-                            .coerceIn(0, slotCount - 1)
-                        if (col in 0..2) {
+                        // Map Y to slot index using layout info (scroll-aware)
+                        val hitItem = listState.layoutInfo.visibleItemsInfo.find { item ->
+                            offset.y >= item.offset && offset.y < item.offset + item.size
+                        }
+                        // index 0 = header row, slot items start at index 1
+                        val idx = if (hitItem != null && hitItem.index > 0) {
+                            (hitItem.index - 1).coerceIn(0, slotCount - 1)
+                        } else -1
+                        if (col in 0..2 && idx >= 0) {
                             dragDayColumn = col
                             dragStartSlotIdx = idx
                             dragCurrentSlotIdx = idx
@@ -176,15 +180,41 @@ fun Calendar3DayView(
                     },
                     onDrag = { change, _ ->
                         change.consume()
-                        val yBelowHeader = change.position.y - headerHeightPx
-                        val idx = (yBelowHeader / slotStepPx).toInt()
-                            .coerceIn(0, slotCount - 1)
-                        dragCurrentSlotIdx = idx
+                        val visibleSlots = listState.layoutInfo.visibleItemsInfo
+                            .filter { it.index > 0 }
+                        val hitItem = visibleSlots.find { item ->
+                            change.position.y >= item.offset &&
+                                change.position.y < item.offset + item.size
+                        }
+                        val idx = when {
+                            hitItem != null -> hitItem.index - 1
+                            visibleSlots.isNotEmpty() &&
+                                change.position.y < visibleSlots.first().offset ->
+                                visibleSlots.first().index - 1
+                            visibleSlots.isNotEmpty() ->
+                                visibleSlots.last().index - 1
+                            else -> dragCurrentSlotIdx
+                        }
+                        dragCurrentSlotIdx = idx.coerceIn(0, slotCount - 1)
                     },
                     onDragEnd = {
-                        val range = dragRange
-                        if (range != null && range.durationMinutes >= 30) {
-                            onSlotRangeSelected(range)
+                        // Read state directly — composed dragRange is stale inside pointerInput
+                        val startIdx = dragStartSlotIdx
+                        val endIdx = dragCurrentSlotIdx
+                        val dayCol = dragDayColumn
+                        if (startIdx >= 0 && endIdx >= 0 && dayCol in daySlots.indices) {
+                            val daySlotList = daySlots[dayCol]
+                            if (startIdx in daySlotList.indices && endIdx in daySlotList.indices) {
+                                val minIdx = minOf(startIdx, endIdx)
+                                val maxIdx = maxOf(startIdx, endIdx)
+                                val range = SlotDragRange(
+                                    startTime = daySlotList[minIdx].start,
+                                    endTime = daySlotList[maxIdx].start.plusMinutes(30)
+                                )
+                                if (range.durationMinutes >= 30) {
+                                    onSlotRangeSelected(range)
+                                }
+                            }
                         }
                         dragStartSlotIdx = -1
                         dragCurrentSlotIdx = -1
@@ -213,9 +243,10 @@ fun Calendar3DayView(
                     val isToday = date == LocalDate.now()
                     val isSelectedDay = dayIdx == selectedDayOffset
                     val weatherCondition = weatherForecast[date]
-                    val weatherTint = weatherCondition?.tintColor ?: Color.Transparent
+                    val weatherTint = weatherCondition?.tintColor(colors.isDark) ?: Color.Transparent
+                    val maxHeaderAlpha = if (colors.isDark) 0.25f else 0.12f
                     val headerBg = if (weatherTint != Color.Transparent) {
-                        weatherTint.copy(alpha = (weatherTint.alpha * 2f).coerceAtMost(0.12f))
+                        weatherTint.copy(alpha = (weatherTint.alpha * 2f).coerceAtMost(maxHeaderAlpha))
                     } else {
                         Color.Transparent
                     }

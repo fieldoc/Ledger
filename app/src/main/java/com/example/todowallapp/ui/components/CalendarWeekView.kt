@@ -107,7 +107,7 @@ private fun WeekDayCard(
     modifier: Modifier = Modifier
 ) {
     val glowColor = colors.accentPrimary
-    val weatherTint = weatherCondition?.tintColor ?: Color.Transparent
+    val weatherTint = weatherCondition?.tintColor(colors.isDark) ?: Color.Transparent
 
     val cardBackground = when {
         isToday -> colors.surfaceCard

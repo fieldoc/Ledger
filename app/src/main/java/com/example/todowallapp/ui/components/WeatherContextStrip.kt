@@ -55,15 +55,17 @@ fun WeatherContextStrip(
 ) {
     val condition = weatherForecast[date] ?: return
     val colors = LocalWallColors.current
-    val tint = condition.tintColor
+    val tint = condition.tintColor(colors.isDark)
     // Strengthen the tint slightly for the strip background
+    val maxStripAlpha = if (colors.isDark) 0.30f else 0.15f
+    val maxBarAlpha = if (colors.isDark) 0.65f else 0.5f
     val stripBg = if (tint != Color.Transparent) {
-        tint.copy(alpha = (tint.alpha * 2.5f).coerceAtMost(0.15f))
+        tint.copy(alpha = (tint.alpha * 2.5f).coerceAtMost(maxStripAlpha))
     } else {
         colors.surfaceCard.copy(alpha = 0.5f)
     }
     val barColor = if (tint != Color.Transparent) {
-        tint.copy(alpha = (tint.alpha * 6f).coerceAtMost(0.5f))
+        tint.copy(alpha = (tint.alpha * 6f).coerceAtMost(maxBarAlpha))
     } else {
         colors.borderColor
     }
@@ -156,9 +158,10 @@ private fun MiniWeatherCard(
     colors: WallColors,
     modifier: Modifier = Modifier
 ) {
-    val tint = condition.tintColor
+    val tint = condition.tintColor(colors.isDark)
+    val maxCardAlpha = if (colors.isDark) 0.25f else 0.12f
     val cardBg = if (tint != Color.Transparent) {
-        tint.copy(alpha = (tint.alpha * 2f).coerceAtMost(0.12f))
+        tint.copy(alpha = (tint.alpha * 2f).coerceAtMost(maxCardAlpha))
     } else {
         colors.surfaceCard.copy(alpha = 0.4f)
     }
