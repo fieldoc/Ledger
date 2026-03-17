@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -479,7 +480,8 @@ fun SettingsPanel(
                 onSaveLocation = onSaveWeatherLocation,
                 onSaveApiKey = onSaveWeatherApiKey,
                 onClearApiKey = onClearWeatherApiKey,
-                onSearchCities = onSearchCities
+                onSearchCities = onSearchCities,
+                scrollState = scrollState
             )
 
             SettingsDivider()
@@ -744,7 +746,8 @@ private fun SettingsWeatherItem(
     onSaveLocation: (String) -> Unit,
     onSaveApiKey: (String) -> Unit,
     onClearApiKey: () -> Unit,
-    onSearchCities: (suspend (String) -> List<String>)
+    onSearchCities: (suspend (String) -> List<String>),
+    scrollState: ScrollState
 ) {
     val colors = LocalWallColors.current
     val alpha by animateFloatAsState(
@@ -799,65 +802,81 @@ private fun SettingsWeatherItem(
         Spacer(modifier = Modifier.height(8.dp))
 
         // Location field
-        Box {
-            OutlinedTextField(
-                value = locationInput,
-                onValueChange = { input ->
-                    locationInput = input
-                    locationSaved = false
-                    if (weatherApiKeyPresent && input.length >= 2) {
-                        searchJob?.cancel()
-                        searchJob = searchScope.launch {
-                            delay(300)
-                            val results = onSearchCities(input)
-                            citySuggestions = results
-                            showSuggestions = results.isNotEmpty()
-                        }
-                    } else {
-                        citySuggestions = emptyList()
-                        showSuggestions = false
+        OutlinedTextField(
+            value = locationInput,
+            onValueChange = { input ->
+                locationInput = input
+                locationSaved = false
+                if (weatherApiKeyPresent && input.length >= 2) {
+                    searchJob?.cancel()
+                    searchJob = searchScope.launch {
+                        delay(300)
+                        val results = onSearchCities(input)
+                        citySuggestions = results
+                        showSuggestions = results.isNotEmpty()
                     }
-                },
-                placeholder = {
-                    Text("City, Country (e.g. London, UK)", color = colors.textMuted, style = MaterialTheme.typography.bodySmall)
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = MaterialTheme.typography.bodySmall.copy(color = colors.textPrimary),
-                shape = RoundedCornerShape(8.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = colors.textPrimary,
-                    unfocusedTextColor = colors.textPrimary,
-                    focusedBorderColor = colors.accentPrimary,
-                    unfocusedBorderColor = colors.borderColor,
-                    cursorColor = colors.accentPrimary
-                )
-            )
-
-            // City suggestions dropdown
-            androidx.compose.material3.DropdownMenu(
-                expanded = showSuggestions && citySuggestions.isNotEmpty(),
-                onDismissRequest = { showSuggestions = false },
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .background(colors.surfaceElevated)
-            ) {
-                citySuggestions.forEach { suggestion ->
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = suggestion,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = colors.textPrimary
-                            )
-                        },
-                        onClick = {
-                            locationInput = suggestion
-                            showSuggestions = false
-                            locationSaved = false
-                        }
-                    )
+                } else {
+                    citySuggestions = emptyList()
+                    showSuggestions = false
                 }
+            },
+            placeholder = {
+                Text("City, Country (e.g. London, UK)", color = colors.textMuted, style = MaterialTheme.typography.bodySmall)
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodySmall.copy(color = colors.textPrimary),
+            shape = RoundedCornerShape(8.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = colors.textPrimary,
+                unfocusedTextColor = colors.textPrimary,
+                focusedBorderColor = colors.accentPrimary,
+                unfocusedBorderColor = colors.borderColor,
+                cursorColor = colors.accentPrimary
+            )
+        )
+
+        // Inline city suggestions (no popup — avoids keyboard dismissal on API 23)
+        AnimatedVisibility(visible = showSuggestions && citySuggestions.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.surfaceCard)
+                    .border(1.dp, colors.borderColor, RoundedCornerShape(8.dp))
+            ) {
+                citySuggestions.forEachIndexed { index, suggestion ->
+                    Text(
+                        text = suggestion,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textPrimary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                locationInput = suggestion
+                                showSuggestions = false
+                                locationSaved = false
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    )
+                    if (index < citySuggestions.lastIndex) {
+                        HorizontalDivider(color = colors.borderColor.copy(alpha = 0.5f))
+                    }
+                }
+            }
+        }
+
+        // Extra space so suggestions can be scrolled above the keyboard
+        AnimatedVisibility(visible = showSuggestions && citySuggestions.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(280.dp))
+        }
+
+        // Auto-scroll after spacer expands the scrollable area
+        LaunchedEffect(showSuggestions, citySuggestions.size) {
+            if (showSuggestions && citySuggestions.isNotEmpty()) {
+                delay(100) // let AnimatedVisibility expand first
+                scrollState.animateScrollTo(scrollState.maxValue)
             }
         }
 

@@ -193,6 +193,7 @@ fun TaskWallApp(
     var signInError by remember { mutableStateOf<String?>(null) }
     var isSigningIn by remember { mutableStateOf(false) }
     var showPhoneSettings by remember { mutableStateOf(false) }
+    var weatherApiKeyPresent by remember { mutableStateOf(weatherKeyStore.hasApiKey()) }
 
     val scanLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
@@ -330,7 +331,7 @@ fun TaskWallApp(
                         syncIntervalMinutes = syncIntervalMinutes,
                         showPhoneSettings = showPhoneSettings,
                         weatherLocation = weatherKeyStore.getLocation() ?: "",
-                        weatherApiKeyPresent = weatherKeyStore.hasApiKey(),
+                        weatherApiKeyPresent = weatherApiKeyPresent,
                         onShowPhoneSettings = { showPhoneSettings = true },
                         onHidePhoneSettings = { showPhoneSettings = false },
                         onLaunchScanner = { request -> scanLauncher.launch(request) },
@@ -344,10 +345,12 @@ fun TaskWallApp(
                         },
                         onSaveWeatherApiKey = { key ->
                             weatherKeyStore.setApiKey(key)
+                            weatherApiKeyPresent = true
                             wallViewModel.refreshWeather()
                         },
                         onClearWeatherApiKey = {
                             weatherKeyStore.clearApiKey()
+                            weatherApiKeyPresent = false
                         },
                         onSearchCities = { query ->
                             weatherRepository.searchCities(query).map { suggestion ->
@@ -388,6 +391,7 @@ private fun WallModeContent(
     val geminiKeyPresent by viewModel.geminiKeyPresent.collectAsState()
     val isValidatingGeminiKey by viewModel.isValidatingGeminiKey.collectAsState()
     val geminiKeyError by viewModel.geminiKeyError.collectAsState()
+    var weatherApiKeyPresent by remember { mutableStateOf(weatherKeyStore.hasApiKey()) }
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
     val scope = rememberCoroutineScope()
@@ -500,19 +504,22 @@ private fun WallModeContent(
                         onSaveGeminiKey = viewModel::validateAndSaveGeminiKey,
                         onClearGeminiKey = viewModel::clearGeminiKey,
                         weatherLocation = weatherKeyStore.getLocation() ?: "",
-                        weatherApiKeyPresent = weatherKeyStore.hasApiKey(),
+                        weatherApiKeyPresent = weatherApiKeyPresent,
                         onSaveWeatherLocation = { location ->
                             weatherKeyStore.setLocation(location)
                         },
                         onSaveWeatherApiKey = { key ->
                             weatherKeyStore.setApiKey(key)
+                            weatherApiKeyPresent = true
                         },
                         onClearWeatherApiKey = {
                             weatherKeyStore.clearApiKey()
+                            weatherApiKeyPresent = false
                         },
                         onSearchCities = { query ->
                             weatherRepository.searchCities(query).map { suggestion ->
-                                "${suggestion.name}, ${suggestion.country}"
+                                listOfNotNull(suggestion.name, suggestion.state, suggestion.country)
+                                    .joinToString(", ")
                             }
                         },
                         onSwitchMode = onSwitchMode,
@@ -576,19 +583,22 @@ private fun WallModeContent(
                         onSaveGeminiKey = viewModel::validateAndSaveGeminiKey,
                         onClearGeminiKey = viewModel::clearGeminiKey,
                         weatherLocation = weatherKeyStore.getLocation() ?: "",
-                        weatherApiKeyPresent = weatherKeyStore.hasApiKey(),
+                        weatherApiKeyPresent = weatherApiKeyPresent,
                         onSaveWeatherLocation = { location ->
                             weatherKeyStore.setLocation(location)
                         },
                         onSaveWeatherApiKey = { key ->
                             weatherKeyStore.setApiKey(key)
+                            weatherApiKeyPresent = true
                         },
                         onClearWeatherApiKey = {
                             weatherKeyStore.clearApiKey()
+                            weatherApiKeyPresent = false
                         },
                         onSearchCities = { query ->
                             weatherRepository.searchCities(query).map { suggestion ->
-                                "${suggestion.name}, ${suggestion.country}"
+                                listOfNotNull(suggestion.name, suggestion.state, suggestion.country)
+                                    .joinToString(", ")
                             }
                         },
                         onSwitchMode = onSwitchMode,
