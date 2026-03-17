@@ -76,7 +76,10 @@ class VoiceParsingCoordinator(
             val apiKey = geminiKeyStore.getApiKey()
             if (apiKey == null) {
                 clearMetadata()
-                voiceCaptureManager.showPreviewFallback(normalizedText)
+                voiceCaptureManager.showPreviewFallback(
+                    normalizedText,
+                    clarification = "No Gemini API key \u2014 add one in Settings for smart parsing"
+                )
                 return@launch
             }
 
@@ -102,9 +105,12 @@ class VoiceParsingCoordinator(
                     lastResponse = validatedResponse
                     voiceCaptureManager.showPreview(validatedResponse)
                 },
-                onFailure = {
+                onFailure = { error ->
                     clearMetadata()
-                    voiceCaptureManager.showPreviewFallback(normalizedText)
+                    voiceCaptureManager.showPreviewFallback(
+                        normalizedText,
+                        clarification = "AI parsing failed \u2014 task will be added as-is"
+                    )
                 }
             )
         }

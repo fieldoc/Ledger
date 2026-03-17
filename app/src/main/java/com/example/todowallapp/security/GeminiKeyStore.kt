@@ -2,15 +2,20 @@ package com.example.todowallapp.security
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+
+// DISTRIBUTION NOTE: This store uses plain SharedPreferences (not encrypted) so that
+// API keys survive app reinstalls via Android Auto Backup. This is acceptable for a
+// single-user kiosk device where disk is physically controlled. If this app is ever
+// distributed to untrusted devices or multiple users, switch back to
+// EncryptedSharedPreferences (and accept that keys won't persist across reinstalls)
+// or use a server-side key vault.
 
 class GeminiKeyStore internal constructor(
     private val keyValueStore: KeyValueStore
 ) {
     constructor(context: Context) : this(
         SharedPreferencesKeyValueStore(
-            createEncryptedPreferences(context.applicationContext)
+            context.applicationContext.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
         )
     )
 
@@ -55,21 +60,7 @@ class GeminiKeyStore internal constructor(
     }
 
     companion object {
-        private const val PREF_FILE = "gemini_secure_prefs"
+        private const val PREF_FILE = "gemini_api_prefs"
         private const val KEY_NAME = "gemini_api_key"
-
-        private fun createEncryptedPreferences(context: Context): SharedPreferences {
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-
-            return EncryptedSharedPreferences.create(
-                context,
-                PREF_FILE,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        }
     }
 }
