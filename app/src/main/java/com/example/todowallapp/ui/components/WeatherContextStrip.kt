@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +52,7 @@ fun WeatherContextStrip(
     weatherForecast: Map<LocalDate, WeatherCondition>,
     isExpanded: Boolean,
     onToggleExpanded: () -> Unit,
+    isFocused: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val condition = weatherForecast[date] ?: return
@@ -70,6 +72,11 @@ fun WeatherContextStrip(
         colors.borderColor
     }
 
+    val focusModifier = if (isFocused) {
+        Modifier.border(2.dp, colors.accentPrimary.copy(alpha = 0.8f), StripShape)
+    } else {
+        Modifier
+    }
     Column(modifier = modifier.fillMaxWidth()) {
         // Primary strip — today's weather
         Row(
@@ -77,6 +84,7 @@ fun WeatherContextStrip(
                 .fillMaxWidth()
                 .height(IntrinsicSize.Min)
                 .clip(StripShape)
+                .then(focusModifier)
                 .background(stripBg, StripShape)
                 .clickable(onClick = onToggleExpanded)
                 .padding(end = 14.dp),

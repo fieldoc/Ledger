@@ -75,7 +75,6 @@ data class TaskWallUiState(
     val calendarError: String? = null,
     val hasCalendarScope: Boolean = false,
     val promotionDraft: PromotionDraft? = null,
-    val promotionAnchor: PromotionAnchor? = null,
     val scheduledTaskEventIds: Map<String, String> = emptyMap(),
     val scheduledTaskTimes: Map<String, LocalDateTime> = emptyMap(),
     val promotionSuccessMessage: String? = null,
@@ -83,8 +82,7 @@ data class TaskWallUiState(
     val lastSyncTime: LocalDateTime? = null,
     val lastSyncSuccess: Boolean? = null,
     val calendarViewMode: CalendarViewMode = CalendarViewMode.MONTH,
-    val eventsForRange: Map<LocalDate, List<CalendarEvent>> = emptyMap(),
-    val calendarRangeStart: LocalDate = LocalDate.now()
+    val eventsForRange: Map<LocalDate, List<CalendarEvent>> = emptyMap()
 )
 
 data class UndoState(
@@ -188,6 +186,7 @@ class TaskWallViewModel(
     // Last sync success tracking
     private var syncFeedbackJob: Job? = null
     private var promotionAnchorExpiryJob: Job? = null
+    private var _promotionAnchor: PromotionAnchor? = null
 
     private val durationOptionsMinutes = listOf(15, 30, 45, 60, 90, 120)
     private val promotionTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
@@ -728,12 +727,32 @@ class TaskWallViewModel(
             when (response.intent) {
                 VoiceIntent.ADD -> {
                     var anyFailed = false
+                    // Cache of newly created lists: newListName → created list ID
+                    val createdListCache = mutableMapOf<String, String>()
+
                     for (task in response.tasks) {
                         if (task.title.isBlank()) continue
+
                         val listId = resolveKnownTaskListId(overrideListId)
                             ?: resolveKnownTaskListId(task.targetListId)
+                            ?: task.newListName?.let { name ->
+                                // Reuse already-created list if same name appeared earlier
+                                createdListCache[name] ?: run {
+                                    tasksRepository.createTaskList(name).fold(
+                                        onSuccess = { created ->
+                                            createdListCache[name] = created.id
+                                            created.id
+                                        },
+                                        onFailure = {
+                                            anyFailed = true
+                                            null
+                                        }
+                                    )
+                                }
+                            }
                             ?: defaultListId
                             ?: continue
+
                         val result = tasksRepository.createTask(
                             taskListId = listId,
                             title = task.title,
@@ -784,8 +803,7 @@ class TaskWallViewModel(
                 }
 
                 VoiceIntent.RESCHEDULE -> {
-                    // Reschedule not yet supported (no updateTask API method)
-                    voiceCaptureManager.setError("Rescheduling not yet supported")
+                    voiceCaptureManager.setError("Rescheduling is not yet supported. Try adding a new task instead.")
                 }
 
                 VoiceIntent.QUERY -> {
@@ -800,6 +818,9 @@ class TaskWallViewModel(
                     if (task != null && task.title.isNotBlank()) {
                         val listId = resolveKnownTaskListId(overrideListId)
                             ?: resolveKnownTaskListId(task.targetListId)
+                            ?: task.newListName?.let { name ->
+                                tasksRepository.createTaskList(name).getOrNull()?.id
+                            }
                             ?: defaultListId
                             ?: return@launch
                         tasksRepository.createTask(
@@ -837,14 +858,6 @@ class TaskWallViewModel(
     private fun resolveKnownTaskListId(candidateId: String?): String? {
         return candidateId?.takeIf { id ->
             _uiState.value.taskLists.any { list -> list.id == id }
-        }
-    }
-
-    fun getPendingTasksByList(): List<Pair<String, List<Task>>> {
-        return _uiState.value.allTaskLists.mapNotNull { listWithTasks ->
-            val pendingTasks = listWithTasks.tasks.filter { !it.isCompleted }
-            if (pendingTasks.isEmpty()) null
-            else listWithTasks.taskList.title to pendingTasks
         }
     }
 
@@ -910,10 +923,6 @@ class TaskWallViewModel(
         }
     }
 
-    fun loadCalendarForSelectedDate() {
-        loadCalendarRange(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
-    }
-
     fun setCalendarViewMode(mode: CalendarViewMode) {
         _uiState.update { it.copy(calendarViewMode = mode) }
         loadCalendarRange(mode, _uiState.value.selectedCalendarDate)
@@ -954,8 +963,6 @@ class TaskWallViewModel(
                 Pair(anchor, anchor)
             }
         }
-
-        _uiState.update { it.copy(calendarRangeStart = start) }
 
         return calendarRepository.getEventsForDateRange(start, end, calendarId).fold(
             onSuccess = { grouped ->
@@ -1024,7 +1031,7 @@ class TaskWallViewModel(
             ?: GoogleCalendarRepository.PRIMARY_CALENDAR_ID
 
         val defaultStart = prefilledStartTime
-            ?: currentState.promotionAnchor?.endsAt
+            ?: _promotionAnchor?.endsAt
             ?: nextQuarterHour(LocalDateTime.now())
 
         val duration = prefilledDurationMinutes
@@ -1127,12 +1134,12 @@ class TaskWallViewModel(
                         updatedScheduleMap[draft.task.id] = event.id
                         val updatedScheduleTimes = state.scheduledTaskTimes.toMutableMap()
                         updatedScheduleTimes[draft.task.id] = draft.startDateTime
+                        _promotionAnchor = PromotionAnchor(
+                            previousEventTitle = event.title,
+                            endsAt = event.endDateTime ?: draft.endDateTime
+                        )
                         state.copy(
                             promotionDraft = null,
-                            promotionAnchor = PromotionAnchor(
-                                previousEventTitle = event.title,
-                                endsAt = event.endDateTime ?: draft.endDateTime
-                            ),
                             scheduledTaskEventIds = updatedScheduleMap,
                             scheduledTaskTimes = updatedScheduleTimes,
                             promotionSuccessMessage = "Scheduled \"${draft.task.title}\" at ${
@@ -1302,7 +1309,7 @@ class TaskWallViewModel(
         promotionAnchorExpiryJob?.cancel()
         promotionAnchorExpiryJob = viewModelScope.launch {
             delay(PROMOTION_ANCHOR_EXPIRY_MS)
-            _uiState.update { it.copy(promotionAnchor = null) }
+            _promotionAnchor = null
         }
     }
 

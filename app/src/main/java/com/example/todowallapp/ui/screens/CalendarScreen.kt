@@ -136,6 +136,7 @@ fun CalendarScreen(
     onSaveWeatherApiKey: (String) -> Unit = {},
     onClearWeatherApiKey: () -> Unit = {},
     onSearchCities: (suspend (String) -> List<String>) = { emptyList() },
+    onDismissCalendarError: () -> Unit = {},
     onSwitchMode: () -> Unit = {},
     onSignOut: () -> Unit = {},
     onRefresh: (() -> Unit)? = null,
@@ -160,6 +161,7 @@ fun CalendarScreen(
     var isDateBarFocused by remember { mutableStateOf(false) }
     var isEditingDate by remember { mutableStateOf(false) }
     var isWeatherExpanded by remember { mutableStateOf(false) }
+    var isWeatherFocused by remember { mutableStateOf(false) }
     var showTaskPicker by remember { mutableStateOf(false) }
     var taskPickerSlotTime by remember { mutableStateOf<LocalDateTime?>(null) }
     var taskPickerFocusIndex by remember { mutableIntStateOf(0) }
@@ -240,7 +242,10 @@ fun CalendarScreen(
                             isSettingsFocused = false
                             when (calendarViewMode) {
                                 CalendarViewMode.WEEK -> onViewModeChange(CalendarViewMode.MONTH)
-                                CalendarViewMode.DAY -> onViewModeChange(CalendarViewMode.WEEK)
+                                CalendarViewMode.DAY -> {
+                                    isWeatherFocused = false
+                                    onViewModeChange(CalendarViewMode.WEEK)
+                                }
                                 CalendarViewMode.THREE_DAY -> onViewModeChange(CalendarViewMode.MONTH)
                                 CalendarViewMode.MONTH -> {} // already at top level
                             }
@@ -492,8 +497,14 @@ fun CalendarScreen(
                                 isViewSwitcherFocused = true
                             }
                             true
-                        } else if (selectedSlotIndex == 0) {
+                        } else if (isWeatherFocused) {
+                            isWeatherFocused = false
                             isDateBarFocused = true
+                            true
+                        } else if (selectedSlotIndex == 0) {
+                            // Stop at weather row before date bar
+                            isWeatherFocused = true
+                            isWeatherExpanded = true
                             true
                         } else {
                             selectedSlotIndex -= 1
@@ -509,10 +520,17 @@ fun CalendarScreen(
                             } else {
                                 isDateBarFocused = false
                                 isEditingDate = false
-                                if (slots.isNotEmpty()) {
-                                    selectedSlotIndex = 0
-                                    selectedEventId = null
-                                }
+                                // Stop at weather row before slots
+                                isWeatherFocused = true
+                                isWeatherExpanded = true
+                            }
+                            true
+                        } else if (isWeatherFocused) {
+                            isWeatherFocused = false
+                            isWeatherExpanded = false
+                            if (slots.isNotEmpty()) {
+                                selectedSlotIndex = 0
+                                selectedEventId = null
                             }
                             true
                         } else if (selectedSlotIndex < slots.lastIndex) {
@@ -525,7 +543,10 @@ fun CalendarScreen(
                     }
 
                     Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                        if (isDateBarFocused) {
+                        if (isWeatherFocused) {
+                            isWeatherExpanded = !isWeatherExpanded
+                            true
+                        } else if (isDateBarFocused) {
                             if (isEditingDate) {
                                 // While editing, Enter cycles through available calendars
                                 val writableCalendars = calendars.filter { it.isWritable }
@@ -669,7 +690,9 @@ fun CalendarScreen(
                         text = error,
                         style = MaterialTheme.typography.bodyMedium,
                         color = LocalWallColors.current.textSecondary,
-                        modifier = Modifier.padding(horizontal = 4.dp)
+                        modifier = Modifier
+                            .padding(horizontal = 4.dp)
+                            .clickable { onDismissCalendarError() }
                     )
                 }
                 AnimatedContent(
@@ -747,7 +770,7 @@ fun CalendarScreen(
                         CalendarViewMode.DAY -> CalendarDayView(
                             date = selectedDate,
                             events = events,
-                            selectedSlotStart = slots.getOrNull(selectedSlotIndex)?.start,
+                            selectedSlotStart = if (!isWeatherFocused && !isDateBarFocused) slots.getOrNull(selectedSlotIndex)?.start else null,
                             selectedEventId = selectedEventId,
                             taskListTitleByTaskId = taskListTitleByTaskId,
                             taskUrgencyByTaskId = taskUrgencyByTaskId,
@@ -786,6 +809,7 @@ fun CalendarScreen(
                             weatherForecast = weatherForecast,
                             isWeatherExpanded = isWeatherExpanded,
                             onToggleWeatherExpanded = { isWeatherExpanded = !isWeatherExpanded },
+                            isWeatherFocused = isWeatherFocused,
                             modifier = Modifier.fillMaxSize()
                         )
                     }

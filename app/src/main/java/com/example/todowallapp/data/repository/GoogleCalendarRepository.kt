@@ -83,35 +83,6 @@ class GoogleCalendarRepository(
         }
     }
 
-    suspend fun getEventsForDate(
-        date: LocalDate,
-        calendarId: String = PRIMARY_CALENDAR_ID
-    ): Result<List<CalendarEvent>> = withContext(Dispatchers.IO) {
-        withCalendarService { service ->
-            val zoneId = ZoneId.systemDefault()
-            val dayStart = date.atStartOfDay(zoneId).toInstant()
-            val dayEnd = date.plusDays(1).atStartOfDay(zoneId).toInstant()
-
-            val response = service.events().list(calendarId)
-                .setShowDeleted(false)
-                .setSingleEvents(true)
-                .setOrderBy("startTime")
-                .setTimeMin(DateTime(dayStart.toEpochMilli()))
-                .setTimeMax(DateTime(dayEnd.toEpochMilli()))
-                .setMaxResults(250)
-                .execute()
-
-            response.items
-                ?.mapNotNull { it.toCalendarEvent(calendarId = calendarId, zoneId = zoneId) }
-                ?.sortedWith(
-                    compareBy<CalendarEvent> { it.isAllDay.not() }
-                        .thenBy { it.startDateTime ?: it.allDayStartDate?.atStartOfDay() ?: LocalDateTime.MIN }
-                        .thenBy { it.title.lowercase() }
-                )
-                ?: emptyList()
-        }
-    }
-
     /**
      * Fetches all events across [startDate]..[endDateInclusive] in a single API call,
      * then groups them by the LocalDate on which they occur.

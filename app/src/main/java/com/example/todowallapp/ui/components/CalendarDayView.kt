@@ -182,6 +182,7 @@ fun CalendarDayView(
     weatherForecast: Map<LocalDate, WeatherCondition> = emptyMap(),
     onToggleWeatherExpanded: () -> Unit = {},
     isWeatherExpanded: Boolean = false,
+    isWeatherFocused: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val dims = rememberLayoutDimensions()
@@ -336,6 +337,7 @@ fun CalendarDayView(
                     weatherForecast = weatherForecast,
                     isExpanded = isWeatherExpanded,
                     onToggleExpanded = onToggleWeatherExpanded,
+                    isFocused = isWeatherFocused,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
             }

@@ -304,7 +304,7 @@ The app runs in immersive fullscreen mode configured in `MainActivity`:
 - Gemini extracts: task title, due date, target list, parent task, clarification
 - Falls back to raw transcription if Gemini parsing fails
 - Hold-to-talk encoder gesture (800ms hold) triggers voice input
-- **Known gap**: Wall-mode voice overlay (waveform + dim) and draft card UI are not yet rendered
+- Voice overlay (waveform + dim), draft card preview, and confirm/cancel flow are fully implemented
 
 ## Project Structure
 
@@ -340,7 +340,7 @@ app/src/main/java/com/example/todowallapp/
     │   ├── CalendarWeekView.kt  # 7-day row view with event chips
     │   ├── SharedTaskPrimitives.kt # Checkbox, due date badge, animations
     │   ├── WaveformVisualizer.kt   # Voice input pulse animation
-    │   ├── UndoToast.kt        # Undo completion (exists but not rendered)
+    │   ├── UndoToast.kt        # Undo completion toast (rendered in TaskWallScreen)
     │   └── ...
     ├── screens/
     │   ├── TaskWallScreen.kt   # Main wall display (~1500 lines), focus/nav, ambient

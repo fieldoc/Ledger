@@ -1,10 +1,13 @@
 package com.example.todowallapp
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -507,10 +510,12 @@ private fun WallModeContent(
                         weatherApiKeyPresent = weatherApiKeyPresent,
                         onSaveWeatherLocation = { location ->
                             weatherKeyStore.setLocation(location)
+                            viewModel.refreshWeather()
                         },
                         onSaveWeatherApiKey = { key ->
                             weatherKeyStore.setApiKey(key)
                             weatherApiKeyPresent = true
+                            viewModel.refreshWeather()
                         },
                         onClearWeatherApiKey = {
                             weatherKeyStore.clearApiKey()
@@ -586,10 +591,12 @@ private fun WallModeContent(
                         weatherApiKeyPresent = weatherApiKeyPresent,
                         onSaveWeatherLocation = { location ->
                             weatherKeyStore.setLocation(location)
+                            viewModel.refreshWeather()
                         },
                         onSaveWeatherApiKey = { key ->
                             weatherKeyStore.setApiKey(key)
                             weatherApiKeyPresent = true
+                            viewModel.refreshWeather()
                         },
                         onClearWeatherApiKey = {
                             weatherKeyStore.clearApiKey()
@@ -604,6 +611,7 @@ private fun WallModeContent(
                         onSwitchMode = onSwitchMode,
                         onSignOut = viewModel::signOut,
                         onRefresh = viewModel::refresh,
+                        onDismissCalendarError = viewModel::clearCalendarError,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -701,6 +709,24 @@ private fun PhoneModeContent(
     onSwitchMode: () -> Unit,
     onSignOut: () -> Unit
 ) {
+    val context = LocalContext.current
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            phoneViewModel.showVoiceSheet()
+        } else {
+            Toast.makeText(context, "Microphone permission required for voice input", Toast.LENGTH_SHORT).show()
+        }
+    }
+    val onVoiceClickWithPermission: () -> Unit = {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            phoneViewModel.showVoiceSheet()
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     if (phoneUiState.parsedCapture != null) {
         ParsedCapturePreviewScreen(
             parsedCapture = phoneUiState.parsedCapture!!,
@@ -739,7 +765,7 @@ private fun PhoneModeContent(
                     )
                 }
             },
-            onVoiceClick = phoneViewModel::showVoiceSheet,
+            onVoiceClick = onVoiceClickWithPermission,
             onRefreshClick = phoneViewModel::refreshTaskListsWithIndicator,
             onSettingsClick = onShowPhoneSettings,
             onSaveCaptureForRetry = phoneViewModel::saveLastCaptureForRetry,

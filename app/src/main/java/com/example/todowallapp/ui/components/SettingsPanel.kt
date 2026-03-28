@@ -70,7 +70,8 @@ private enum class SettingsItemType {
     GEMINI_KEY,
     WEATHER,
     SWITCH_MODE,
-    SIGN_OUT
+    SIGN_OUT,
+    CLOSE
 }
 
 @Composable
@@ -113,6 +114,7 @@ fun SettingsPanel(
             add(SettingsItemType.WEATHER)
             add(SettingsItemType.SWITCH_MODE)
             add(SettingsItemType.SIGN_OUT)
+            add(SettingsItemType.CLOSE)
         }
     }
 
@@ -168,6 +170,7 @@ fun SettingsPanel(
         SettingsItemType.WEATHER -> "Weather settings selected"
         SettingsItemType.SWITCH_MODE -> "Switch mode selected"
         SettingsItemType.SIGN_OUT -> "Sign out selected"
+        SettingsItemType.CLOSE -> "Close settings selected"
     }
 
     LaunchedEffect(Unit) {
@@ -307,6 +310,7 @@ fun SettingsPanel(
                             SettingsItemType.WEATHER -> { /* touch-only: text fields + buttons */ }
                             SettingsItemType.SWITCH_MODE -> triggerSwitchMode()
                             SettingsItemType.SIGN_OUT -> triggerSignOut()
+                            SettingsItemType.CLOSE -> onDismiss()
                         }
                         true
                     }
@@ -527,9 +531,20 @@ fun SettingsPanel(
                 }
             }
 
+            SettingsDivider()
+
+            SettingsItem(
+                label = "Close Settings",
+                isSelected = focusedItem == SettingsItemType.CLOSE,
+                onClick = {
+                    focusedIndex = items.indexOf(SettingsItemType.CLOSE).coerceAtLeast(0)
+                    onDismiss()
+                }
+            ) {}
+
             Spacer(modifier = Modifier.height(14.dp))
             Text(
-                text = "Encoder: Up/Down navigate. Select enters edit mode, then Up/Down adjusts.",
+                text = "Encoder: Up/Down navigate. Click to select. Double-click tasks for actions.",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.textMuted
             )

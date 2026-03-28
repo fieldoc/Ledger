@@ -307,6 +307,8 @@ fun TaskWallScreen(
     var contextMenuTask by remember { mutableStateOf<Task?>(null) }
     var contextMenuSelectedIndex by remember { mutableIntStateOf(0) }
     var voicePreviewFocus by remember { mutableIntStateOf(0) } // 0=Confirm, 1=Cancel
+    var lastEncoderClickTimeMs by remember { mutableLongStateOf(0L) }
+    var pendingClickJob by remember { mutableStateOf<Job?>(null) }
     val viewSwitcherOptions = remember {
         listOf(
             ViewSwitcherOption(key = "tasks", label = "Tasks"),
@@ -802,9 +804,10 @@ fun TaskWallScreen(
                     }
                     return@onKeyEvent true
                 }
-                // Settings panel open — encoder click dismisses
+                // Settings panel open — only Escape/Back dismisses;
+                // Enter/Space are left for SettingsPanel's own handler to cycle values
                 if (showSettings) {
-                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key in listOf(Key.Enter, Key.NumPadEnter, Key.Spacebar)) {
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key in listOf(Key.Escape, Key.Back)) {
                         showSettings = false
                         performAppHaptic(view, context, AppHapticPattern.CONFIRM)
                     }
@@ -861,7 +864,32 @@ fun TaskWallScreen(
                                 if (voiceState is VoiceInputState.Listening) onStopVoice()
                                 holdToTalkActive = false
                             } else if (!promoteTriggered) {
-                                selectCurrent()
+                                // Double-click detection for context menu
+                                val focusedNode = selectedFocusKey?.let(focusIndexByKey::get)?.let(focusOrder::getOrNull)
+                                if (focusedNode?.task != null) {
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastEncoderClickTimeMs < 350L) {
+                                        // Double-click on task — open context menu
+                                        pendingClickJob?.cancel()
+                                        pendingClickJob = null
+                                        lastEncoderClickTimeMs = 0L
+                                        contextMenuTask = focusedNode.task
+                                        contextMenuSelectedIndex = 0
+                                        performAppHaptic(view, context, AppHapticPattern.CONFIRM)
+                                    } else {
+                                        // First click — delay to allow double-click
+                                        lastEncoderClickTimeMs = now
+                                        pendingClickJob?.cancel()
+                                        pendingClickJob = holdToTalkScope.launch {
+                                            delay(350L)
+                                            selectCurrent()
+                                            lastEncoderClickTimeMs = 0L
+                                        }
+                                    }
+                                } else {
+                                    // Non-task focus node — instant click
+                                    selectCurrent()
+                                }
                             } else {
                                 // Medium hold (350-800ms) released — open context menu
                                 val focusedNode = selectedFocusKey?.let(focusIndexByKey::get)?.let(focusOrder::getOrNull)
@@ -1028,7 +1056,8 @@ fun TaskWallScreen(
                                     selectedFocusKey = taskFocusKey(model.taskList.id, task.id)
                                     contextMenuTask = task
                                     contextMenuSelectedIndex = 0
-                                }
+                                },
+                                onOpenScheduledTask = onOpenScheduledTask
                             )
                         }
                     }
@@ -1330,6 +1359,7 @@ private fun FolderSection(
     onParentClick: (Task) -> Unit,
     onTaskToggle: (Task) -> Unit,
     onTaskLongClick: (Task) -> Unit = {},
+    onOpenScheduledTask: (Task, LocalDateTime?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val folderId = model.taskList.id
@@ -1461,7 +1491,7 @@ private fun FolderSection(
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 16.dp).animateContentSize(animationSpec = tween(WallAnimations.MEDIUM)), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     model.pendingGroups.forEach { group ->
-                        ParentChildGroup(group, folderId, selectedFocusKey, isAmbientMode, isExpanded, scheduledTaskIds, scheduledTaskTimes, holdProgressFraction, onParentClick, onTaskToggle, onTaskLongClick)
+                        ParentChildGroup(group, folderId, selectedFocusKey, isAmbientMode, isExpanded, scheduledTaskIds, scheduledTaskTimes, holdProgressFraction, onParentClick, onTaskToggle, onTaskLongClick, onOpenScheduledTask)
                     }
 
                     // Completed section divider + completed tasks (Task 12)
@@ -1523,7 +1553,8 @@ private fun ParentChildGroup(
     holdProgressFraction: Float,
     onParentClick: (Task) -> Unit,
     onTaskToggle: (Task) -> Unit,
-    onTaskLongClick: (Task) -> Unit = {}
+    onTaskLongClick: (Task) -> Unit = {},
+    onOpenScheduledTask: (Task, LocalDateTime?) -> Unit = { _, _ -> }
 ) {
     val parentKey = taskFocusKey(folderId, group.parent.id)
     val shouldShowChildren = isExpanded && group.children.isNotEmpty()
@@ -1539,7 +1570,10 @@ private fun ParentChildGroup(
             isExpanded = shouldShowChildren,
             holdProgressFraction = if (selectedFocusKey == parentKey) holdProgressFraction else 0f,
             onClick = { onParentClick(group.parent) },
-            onLongClick = { onTaskLongClick(group.parent) }
+            onLongClick = { onTaskLongClick(group.parent) },
+            onOpenScheduledSlot = {
+                onOpenScheduledTask(group.parent, scheduledTaskTimes[group.parent.id])
+            }
         )
 
         if (shouldShowChildren) {
@@ -1555,7 +1589,10 @@ private fun ParentChildGroup(
                     holdProgressFraction = if (selectedFocusKey == childKey) holdProgressFraction else 0f,
                     modifier = Modifier.padding(start = 32.dp),
                     onClick = { onTaskToggle(child) },
-                    onLongClick = { onTaskLongClick(child) }
+                    onLongClick = { onTaskLongClick(child) },
+                    onOpenScheduledSlot = {
+                        onOpenScheduledTask(child, scheduledTaskTimes[child.id])
+                    }
                 )
             }
         }

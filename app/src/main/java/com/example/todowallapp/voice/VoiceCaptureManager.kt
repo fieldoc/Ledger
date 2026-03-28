@@ -176,6 +176,8 @@ class VoiceCaptureManager(private val context: Context) {
     fun cancel() {
         mainHandler.removeCallbacks(timeoutRunnable)
         speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         _state.value = VoiceInputState.Idle
     }
 
@@ -197,6 +199,7 @@ class VoiceCaptureManager(private val context: Context) {
                         dueDate = null,
                         preferredTime = null,
                         targetListId = null,
+                        newListName = null,
                         parentTaskId = null,
                         confidence = 0f,
                         duplicateOf = null

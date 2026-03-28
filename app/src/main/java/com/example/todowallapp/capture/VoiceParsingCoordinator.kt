@@ -4,6 +4,7 @@ import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
 import com.example.todowallapp.capture.repository.ParsedVoiceResponse
+import com.example.todowallapp.capture.repository.VoiceIntent
 import com.example.todowallapp.security.GeminiKeyStore
 import com.example.todowallapp.voice.VoiceCaptureManager
 import kotlinx.coroutines.CoroutineScope
@@ -103,7 +104,14 @@ class VoiceParsingCoordinator(
                         }
                     )
                     lastResponse = validatedResponse
-                    voiceCaptureManager.showPreview(validatedResponse)
+                    if (validatedResponse.intent == VoiceIntent.RESCHEDULE) {
+                        clearMetadata()
+                        voiceCaptureManager.setError(
+                            "Rescheduling is not yet supported. Try adding a new task instead."
+                        )
+                    } else {
+                        voiceCaptureManager.showPreview(validatedResponse)
+                    }
                 },
                 onFailure = { error ->
                     clearMetadata()

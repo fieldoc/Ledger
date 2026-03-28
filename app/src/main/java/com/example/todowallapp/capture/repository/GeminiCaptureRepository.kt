@@ -17,14 +17,6 @@ import java.time.LocalTime
 private const val GEMINI_BASE_URL =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
 
-data class ParsedVoiceTask(
-    val title: String,
-    val dueDate: LocalDate?,
-    val targetListId: String?,
-    val parentTaskId: String? = null,
-    val clarification: String? = null
-)
-
 enum class VoiceIntent { ADD, COMPLETE, RESCHEDULE, DELETE, QUERY, AMEND }
 
 enum class PreferredTime { MORNING, AFTERNOON, EVENING }
@@ -34,6 +26,7 @@ data class ParsedVoiceTaskItem(
     val dueDate: LocalDate?,
     val preferredTime: PreferredTime?,
     val targetListId: String?,
+    val newListName: String?,
     val parentTaskId: String?,
     val confidence: Float,
     val duplicateOf: String?
@@ -107,42 +100,6 @@ class GeminiCaptureRepository(
             val retryPrompt = buildPrompt(existingLists, todayDate, malformedRetry = true)
             val secondAttemptText = callGeminiForJson(apiKey, retryPrompt, imageJpegBytes)
             jsonParser.parse(secondAttemptText).getOrThrow()
-        }
-    }
-
-    suspend fun parseVoiceInput(
-        apiKey: String,
-        rawText: String,
-        existingLists: List<ExistingListRef>,
-        existingTasks: List<ExistingTaskRef> = emptyList(),
-        todayDate: LocalDate = LocalDate.now()
-    ): Result<ParsedVoiceTask> = withContext(Dispatchers.IO) {
-        runCatching {
-            val prompt = buildVoicePrompt(
-                rawText = rawText,
-                existingLists = existingLists,
-                existingTasks = existingTasks,
-                todayDate = todayDate
-            )
-            val requestBody = JsonObject().apply {
-                add("contents", JsonArray().apply {
-                    add(JsonObject().apply {
-                        add("parts", JsonArray().apply {
-                            add(JsonObject().apply { addProperty("text", prompt) })
-                        })
-                    })
-                })
-                add("generationConfig", JsonObject().apply {
-                    addProperty("temperature", 0.1)
-                    addProperty("responseMimeType", "application/json")
-                })
-            }
-            val response = apiClient.generateContent(
-                apiKey = apiKey,
-                requestBody = requestBody
-            )
-            val responseText = extractTextFromGeminiResponse(response)
-            parseVoiceTaskJson(responseText, existingLists, existingTasks)
         }
     }
 
@@ -318,109 +275,6 @@ class GeminiCaptureRepository(
         """.trimIndent()
     }
 
-    private fun buildVoicePrompt(
-        rawText: String,
-        existingLists: List<ExistingListRef>,
-        existingTasks: List<ExistingTaskRef>,
-        todayDate: LocalDate
-    ): String {
-        val listContext = if (existingLists.isEmpty()) {
-            "No existing lists found."
-        } else {
-            existingLists.joinToString(separator = "\n") { list ->
-                "- List: ${list.title} [id=${list.id}]"
-            }
-        }
-        val taskContext = if (existingTasks.isEmpty()) {
-            ""
-        } else {
-            "\nExisting Top-Level Tasks:\n" + existingTasks.joinToString(separator = "\n") { task ->
-                "- Task: ${task.title} [id=${task.id}] in listId=${task.listId}"
-            }
-        }
-
-        return """
-            You are a helpful task assistant that converts speech into high-quality to-do tasks.
-            Today is $todayDate (${todayDate.dayOfWeek}).
-            
-            Context:
-            $listContext$taskContext
-
-            Input transcript:
-            "$rawText"
-
-            INSTRUCTIONS:
-            1) Disambiguate Intent:
-               - If the user says "add X to my list", look for the most semantically relevant list (e.g., "Add milk" -> "Shopping" list).
-               - If the user says "put X under Y", Y might be a List or a Task. 
-                 * If Y matches a Task title, set parentTaskId and targetListId (the task's list).
-                 * If Y matches a List title, set targetListId and parentTaskId=null.
-               - Be adaptive: match synonyms and meanings (e.g. "job" -> "Work", "groceries" -> "Shopping").
-
-            2) Clarification:
-               - If you are genuinely unsure about which list or task to target (e.g. multiple strong matches or zero context), return a 'clarification' message instead of a title. 
-               - The clarification should be a friendly, natural question (e.g. "I found multiple shopping lists, which one should I use?").
-
-            3) Clean Titles:
-               - Strip all filler words ("remind me to", "hey assistant", etc.).
-               - Resulting 'title' should be a standalone task (e.g., "Buy carrots").
-
-            4) Response Format:
-               - Return ONLY strict JSON in this schema:
-               {
-                 "title": "string|null",
-                 "dueDate": "YYYY-MM-DD|null",
-                 "targetListId": "string|null",
-                 "parentTaskId": "string|null",
-                 "clarification": "string|null"
-               }
-            
-            5) Clean Output: No markdown, no commentary.
-        """.trimIndent()
-    }
-
-    private fun parseVoiceTaskJson(
-        rawJson: String,
-        existingLists: List<ExistingListRef>,
-        existingTasks: List<ExistingTaskRef>
-    ): ParsedVoiceTask {
-        val root = JsonParser.parseString(rawJson).asJsonObject
-        
-        val clarification = root.stringValue("clarification")
-        if (clarification != null) {
-            return ParsedVoiceTask(
-                title = "",
-                dueDate = null,
-                targetListId = null,
-                clarification = clarification
-            )
-        }
-
-        val title = root.stringValue("title")
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: ""
-            
-        val dueDate = root.stringValue("dueDate")
-            ?.let { dueRaw ->
-                runCatching { LocalDate.parse(dueRaw) }.getOrNull()
-            }
-            
-        val targetListId = root.stringValue("targetListId")
-            ?.takeIf { candidateId -> existingLists.any { it.id == candidateId } }
-            
-        val parentTaskId = root.stringValue("parentTaskId")
-            ?.takeIf { pId -> existingTasks.any { it.id == pId } }
-
-        return ParsedVoiceTask(
-            title = title,
-            dueDate = dueDate,
-            targetListId = targetListId,
-            parentTaskId = parentTaskId,
-            clarification = null
-        )
-    }
-
     private fun buildVoicePromptV2(
         rawText: String,
         existingLists: List<ExistingListRef>,
@@ -517,13 +371,20 @@ class GeminiCaptureRepository(
                - "Buy groceries for the party" is NOT a duplicate of "Buy groceries" (different scope)
                Be conservative — only flag clear semantic matches, not vague similarities.
 
-            6) LIST INFERENCE
+            6) LIST INFERENCE & CREATION
                Route each task to the most appropriate list, even when no list is explicitly mentioned:
                - Infer from task content: "Buy drill bit" → Hardware/Home Improvement list
                - Infer from semantic domain: "Schedule dentist" → Health/Medical or Personal list
                - Match synonyms: "groceries", "food", "ingredients" → Shopping list
                - If explicitly mentioned ("add to my work list"), use the mentioned list
                - If no confident match, set targetListId to null (app will use the current/default list)
+
+               LIST CREATION: If the user explicitly asks to CREATE or MAKE a new list (e.g., "make a new grocery list", "create a shopping list and add milk"):
+               - Set targetListId to null
+               - Set newListName to the desired list name
+               - If a list with that exact name already exists in the available lists, make the name unique by appending the current date (e.g., "Grocery List - ${todayDate.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }} ${todayDate.monthValue}/${todayDate.dayOfMonth}")
+               - All tasks from the utterance that belong to this new list should share the same newListName value
+               - If the user does NOT ask to create a new list, set newListName to null
 
             7) CONFIDENCE SCORING
                Rate confidence from 0.0 to 1.0 for each task:
@@ -542,6 +403,7 @@ class GeminiCaptureRepository(
                      "dueDate": "YYYY-MM-DD|null",
                      "preferredTime": "morning|afternoon|evening|null",
                      "targetListId": "string|null",
+                     "newListName": "string|null",
                      "parentTaskId": "string|null",
                      "confidence": 0.0,
                      "duplicateOf": "existing-task-id|null"
@@ -585,6 +447,7 @@ class GeminiCaptureRepository(
                 }
                 val targetListId = obj.stringValue("targetListId")
                     ?.takeIf { candidateId -> existingLists.any { it.id == candidateId } }
+                val newListName = obj.stringValue("newListName")
                 val parentTaskId = obj.stringValue("parentTaskId")
                     ?.takeIf { pId -> existingTasks.any { it.id == pId } }
                 val confidence = runCatching {
@@ -598,6 +461,7 @@ class GeminiCaptureRepository(
                     dueDate = dueDate,
                     preferredTime = preferredTime,
                     targetListId = targetListId,
+                    newListName = newListName,
                     parentTaskId = parentTaskId,
                     confidence = confidence.coerceIn(0f, 1f),
                     duplicateOf = duplicateOf

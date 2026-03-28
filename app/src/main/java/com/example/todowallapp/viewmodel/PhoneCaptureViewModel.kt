@@ -303,12 +303,32 @@ class PhoneCaptureViewModel(
             when (response.intent) {
                 VoiceIntent.ADD -> {
                     var anyFailed = false
+                    // Cache of newly created lists: newListName → created list ID
+                    val createdListCache = mutableMapOf<String, String>()
+
                     for (task in response.tasks) {
                         if (task.title.isBlank()) continue
+
                         val listId = resolveKnownTaskListId(overrideListId)
                             ?: resolveKnownTaskListId(task.targetListId)
+                            ?: task.newListName?.let { name ->
+                                // Reuse already-created list if same name appeared earlier
+                                createdListCache[name] ?: run {
+                                    tasksRepository.createTaskList(name).fold(
+                                        onSuccess = { created ->
+                                            createdListCache[name] = created.id
+                                            created.id
+                                        },
+                                        onFailure = {
+                                            anyFailed = true
+                                            null
+                                        }
+                                    )
+                                }
+                            }
                             ?: defaultListId
                             ?: continue
+
                         val result = tasksRepository.createTask(
                             taskListId = listId,
                             title = task.title,
@@ -376,6 +396,9 @@ class PhoneCaptureViewModel(
                     if (task != null && task.title.isNotBlank()) {
                         val listId = resolveKnownTaskListId(overrideListId)
                             ?: resolveKnownTaskListId(task.targetListId)
+                            ?: task.newListName?.let { name ->
+                                tasksRepository.createTaskList(name).getOrNull()?.id
+                            }
                             ?: defaultListId
                             ?: return@launch
                         tasksRepository.createTask(
