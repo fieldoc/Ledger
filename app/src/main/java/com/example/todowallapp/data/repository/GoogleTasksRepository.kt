@@ -143,6 +143,31 @@ class GoogleTasksRepository(
         }
     }
 
+    /**
+     * Update the due date of an existing task.
+     * Pass null to clear the due date.
+     */
+    suspend fun updateTaskDueDate(
+        taskListId: String,
+        taskId: String,
+        dueDate: LocalDate?
+    ): Result<Task> = withContext(Dispatchers.IO) {
+        withTasksService { service ->
+            val currentTask = service.tasks().get(taskListId, taskId).execute()
+            if (dueDate != null) {
+                val dueInstant = dueDate
+                    .atStartOfDay()
+                    .atOffset(ZoneOffset.UTC)
+                    .toInstant()
+                currentTask.due = dueInstant.toString()
+            } else {
+                currentTask.due = ""   // empty string clears the due date in Google Tasks API
+            }
+            val updatedTask = service.tasks().update(taskListId, taskId, currentTask).execute()
+            updatedTask.toAppTask()
+        }
+    }
+
     suspend fun deleteTask(taskListId: String, taskId: String): Result<Unit> = withContext(Dispatchers.IO) {
         withTasksService { service ->
             service.tasks().delete(taskListId, taskId).execute()
