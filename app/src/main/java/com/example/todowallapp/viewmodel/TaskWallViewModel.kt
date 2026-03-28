@@ -10,10 +10,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.todowallapp.auth.AuthState
 import com.example.todowallapp.auth.GoogleAuthManager
+import com.example.todowallapp.capture.RescheduleRetryContext
 import com.example.todowallapp.capture.VoiceParsingCoordinator
 import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
+import com.example.todowallapp.capture.repository.ParsedVoiceResponse
 import com.example.todowallapp.capture.repository.VoiceIntent
 import com.example.todowallapp.data.model.CalendarEvent
 import com.example.todowallapp.data.model.CalendarViewMode
@@ -82,7 +84,8 @@ data class TaskWallUiState(
     val lastSyncTime: LocalDateTime? = null,
     val lastSyncSuccess: Boolean? = null,
     val calendarViewMode: CalendarViewMode = CalendarViewMode.MONTH,
-    val eventsForRange: Map<LocalDate, List<CalendarEvent>> = emptyMap()
+    val eventsForRange: Map<LocalDate, List<CalendarEvent>> = emptyMap(),
+    val transientMessage: String? = null
 )
 
 data class UndoState(
@@ -211,6 +214,7 @@ class TaskWallViewModel(
         loadSettings()
         checkAuthState()
         observeConnectivity()
+        observeVoiceState()
     }
 
     /** Sync immediately when connectivity returns; reset exponential backoff. */
@@ -803,7 +807,31 @@ class TaskWallViewModel(
                 }
 
                 VoiceIntent.RESCHEDULE -> {
-                    voiceCaptureManager.setError("Rescheduling is not yet supported. Try adding a new task instead.")
+                    val task = response.tasks.firstOrNull() ?: run {
+                        voiceCaptureManager.setError("Couldn't find that task")
+                        return@launch
+                    }
+                    val targetId = task.parentTaskId ?: run {
+                        voiceCaptureManager.setError("Couldn't identify which task to reschedule")
+                        return@launch
+                    }
+                    val targetListId = findTaskListId(targetId) ?: run {
+                        voiceCaptureManager.setError("Couldn't find that task in your lists")
+                        return@launch
+                    }
+                    voiceParsingCoordinator.clearMetadata()
+                    voiceCaptureManager.resetToIdle()
+                    tasksRepository.updateTaskDueDate(targetListId, targetId, task.dueDate).fold(
+                        onSuccess = {
+                            val dateLabel = if (task.dueDate == null) "cleared"
+                                           else task.dueDate.format(java.time.format.DateTimeFormatter.ofPattern("EEE MMM d"))
+                            setTransientMessage("Moved to $dateLabel")
+                            refresh()
+                        },
+                        onFailure = {
+                            voiceCaptureManager.setError("Failed to reschedule task")
+                        }
+                    )
                 }
 
                 VoiceIntent.QUERY -> {
@@ -853,6 +881,85 @@ class TaskWallViewModel(
     fun dismissVoiceError() {
         voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.resetToIdle()
+    }
+
+    // ── Transient message (auto-dismissing 2-second banner) ──────────────────
+
+    private var transientMessageJob: Job? = null
+
+    private fun setTransientMessage(message: String) {
+        _uiState.update { it.copy(transientMessage = message) }
+        transientMessageJob?.cancel()
+        transientMessageJob = viewModelScope.launch {
+            delay(2000)
+            _uiState.update { it.copy(transientMessage = null) }
+        }
+    }
+
+    fun clearTransientMessage() {
+        transientMessageJob?.cancel()
+        _uiState.update { it.copy(transientMessage = null) }
+    }
+
+    // ── Voice state observer: auto-confirm high-confidence RESCHEDULE ─────────
+
+    private fun observeVoiceState() {
+        viewModelScope.launch {
+            voiceCaptureManager.state.collect { state ->
+                if (state is VoiceInputState.Preview &&
+                    state.response.intent == VoiceIntent.RESCHEDULE &&
+                    (state.response.tasks.firstOrNull()?.confidence ?: 0f) > 0.70f) {
+                    autoConfirmReschedule(state.response)
+                }
+            }
+        }
+    }
+
+    private suspend fun autoConfirmReschedule(response: ParsedVoiceResponse) {
+        val task = response.tasks.firstOrNull() ?: run {
+            voiceCaptureManager.setError("Couldn't find that task")
+            return
+        }
+        val targetId = task.parentTaskId ?: run {
+            voiceCaptureManager.setError("Couldn't identify which task to reschedule")
+            return
+        }
+        val targetListId = findTaskListId(targetId) ?: run {
+            voiceCaptureManager.setError("Couldn't find that task in your lists")
+            return
+        }
+        voiceCaptureManager.resetToIdle()
+        voiceParsingCoordinator.clearMetadata()
+        tasksRepository.updateTaskDueDate(targetListId, targetId, task.dueDate).fold(
+            onSuccess = {
+                val dateLabel = if (task.dueDate == null) "cleared"
+                               else task.dueDate.format(java.time.format.DateTimeFormatter.ofPattern("EEE MMM d"))
+                setTransientMessage("Moved to $dateLabel")
+                refresh()
+            },
+            onFailure = {
+                voiceCaptureManager.setError("Failed to reschedule task")
+            }
+        )
+    }
+
+    /**
+     * Called when the user taps Retry on a low-confidence reschedule preview card.
+     * Arms the coordinator with retry context, then starts a new listening session.
+     */
+    fun retryReschedule() {
+        val response = voiceParsingCoordinator.lastResponse ?: return
+        val task = response.tasks.firstOrNull() ?: return
+        val targetId = task.parentTaskId ?: return
+        val ctx = RescheduleRetryContext(
+            originalTranscript = response.rawTranscript,
+            targetTaskTitle = task.title,
+            targetTaskId = targetId,
+            firstParsedDate = task.dueDate
+        )
+        voiceParsingCoordinator.armRescheduleRetry(ctx)
+        voiceCaptureManager.resetToIdle()
+        voiceCaptureManager.startListening()
     }
 
     private fun resolveKnownTaskListId(candidateId: String?): String? {
