@@ -14,6 +14,17 @@ import java.time.LocalDate
 import java.time.LocalTime
 
 /**
+ * Holds context from a failed RESCHEDULE parse so the next transcription can
+ * be sent to Gemini with conversational history.
+ */
+data class RescheduleRetryContext(
+    val originalTranscript: String,
+    val targetTaskTitle: String,
+    val targetTaskId: String,
+    val firstParsedDate: LocalDate?
+)
+
+/**
  * Shared coordinator that handles voice transcription → Gemini AI parsing → preview.
  *
  * Both TaskWallViewModel and PhoneCaptureViewModel delegate their voice-parsing
@@ -29,6 +40,14 @@ class VoiceParsingCoordinator(
         private set
 
     private var parseJob: Job? = null
+
+    // Non-null when the user tapped Retry on a low-confidence RESCHEDULE preview
+    private var rescheduleRetryContext: RescheduleRetryContext? = null
+
+    /** Called by ViewModel when user taps Retry on the reschedule preview card. */
+    fun armRescheduleRetry(context: RescheduleRetryContext) {
+        rescheduleRetryContext = context
+    }
 
     /**
      * Wire up the [VoiceCaptureManager.rawResultCallback] to run AI parsing.
@@ -84,14 +103,37 @@ class VoiceParsingCoordinator(
                 return@launch
             }
 
-            val parseResult = geminiCaptureRepository.parseVoiceInputV2(
-                apiKey = apiKey,
-                rawText = normalizedText,
-                existingLists = existingLists,
-                existingTasks = existingTasks,
-                todayDate = LocalDate.now(),
-                currentTime = LocalTime.now()
-            )
+            val retryCtx = rescheduleRetryContext
+            val parseResult = if (retryCtx != null) {
+                rescheduleRetryContext = null  // consume immediately — one retry only
+                geminiCaptureRepository.parseRescheduleRetry(
+                    apiKey = apiKey,
+                    originalTranscript = retryCtx.originalTranscript,
+                    targetTaskTitle = retryCtx.targetTaskTitle,
+                    firstParsedDate = retryCtx.firstParsedDate,
+                    clarificationTranscript = normalizedText,
+                    existingLists = existingLists,
+                    existingTasks = existingTasks,
+                    todayDate = LocalDate.now()
+                ).map { response ->
+                    // Re-inject the known targetTaskId into parentTaskId,
+                    // since the retry prompt can't re-look it up.
+                    response.copy(
+                        tasks = response.tasks.map { task ->
+                            task.copy(parentTaskId = retryCtx.targetTaskId)
+                        }
+                    )
+                }
+            } else {
+                geminiCaptureRepository.parseVoiceInputV2(
+                    apiKey = apiKey,
+                    rawText = normalizedText,
+                    existingLists = existingLists,
+                    existingTasks = existingTasks,
+                    todayDate = LocalDate.now(),
+                    currentTime = LocalTime.now()
+                )
+            }
 
             parseResult.fold(
                 onSuccess = { response ->
@@ -104,16 +146,9 @@ class VoiceParsingCoordinator(
                         }
                     )
                     lastResponse = validatedResponse
-                    if (validatedResponse.intent == VoiceIntent.RESCHEDULE) {
-                        clearMetadata()
-                        voiceCaptureManager.setError(
-                            "Rescheduling is not yet supported. Try adding a new task instead."
-                        )
-                    } else {
-                        voiceCaptureManager.showPreview(validatedResponse)
-                    }
+                    voiceCaptureManager.showPreview(validatedResponse)
                 },
-                onFailure = { error ->
+                onFailure = { _ ->
                     clearMetadata()
                     voiceCaptureManager.showPreviewFallback(
                         normalizedText,
@@ -127,11 +162,13 @@ class VoiceParsingCoordinator(
     /** Cancel any in-flight parse and reset stored response. */
     fun clearMetadata() {
         lastResponse = null
+        rescheduleRetryContext = null
     }
 
     /** Cancel in-flight work. Call from ViewModel.onCleared(). */
     fun cancelParse() {
         parseJob?.cancel()
+        rescheduleRetryContext = null
     }
 
     /** Full teardown: cancel work + clear metadata. */
