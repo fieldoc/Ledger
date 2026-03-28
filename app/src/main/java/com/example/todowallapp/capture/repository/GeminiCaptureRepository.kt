@@ -141,6 +141,48 @@ class GeminiCaptureRepository(
         }
     }
 
+    /**
+     * Re-parse a RESCHEDULE utterance after the user indicated the first parse was wrong.
+     * Bundles original transcript + first interpretation + clarification into one prompt.
+     */
+    suspend fun parseRescheduleRetry(
+        apiKey: String,
+        originalTranscript: String,
+        targetTaskTitle: String,
+        firstParsedDate: LocalDate?,
+        clarificationTranscript: String,
+        existingLists: List<ExistingListRef>,
+        existingTasks: List<ExistingTaskRef>,
+        todayDate: LocalDate = LocalDate.now()
+    ): Result<ParsedVoiceResponse> = withContext(Dispatchers.IO) {
+        runCatching {
+            val prompt = buildRescheduleRetryPrompt(
+                originalTranscript = originalTranscript,
+                targetTaskTitle = targetTaskTitle,
+                firstParsedDate = firstParsedDate,
+                clarificationTranscript = clarificationTranscript,
+                existingLists = existingLists,
+                todayDate = todayDate
+            )
+            val requestBody = JsonObject().apply {
+                add("contents", JsonArray().apply {
+                    add(JsonObject().apply {
+                        add("parts", JsonArray().apply {
+                            add(JsonObject().apply { addProperty("text", prompt) })
+                        })
+                    })
+                })
+                add("generationConfig", JsonObject().apply {
+                    addProperty("temperature", 0.1)
+                    addProperty("responseMimeType", "application/json")
+                })
+            }
+            val response = apiClient.generateContent(apiKey = apiKey, requestBody = requestBody)
+            val responseText = extractTextFromGeminiResponse(response)
+            parseVoiceResponseJson(responseText, clarificationTranscript, existingLists, existingTasks)
+        }
+    }
+
     private fun callGeminiForJson(
         apiKey: String,
         prompt: String,
@@ -416,6 +458,65 @@ class GeminiCaptureRepository(
                For "amend" intent, return the amended version as a single task.
 
             9) CLEAN OUTPUT: No markdown, no commentary. Just the JSON.
+        """.trimIndent()
+    }
+
+    private fun buildRescheduleRetryPrompt(
+        originalTranscript: String,
+        targetTaskTitle: String,
+        firstParsedDate: LocalDate?,
+        clarificationTranscript: String,
+        existingLists: List<ExistingListRef>,
+        todayDate: LocalDate
+    ): String {
+        val listContext = if (existingLists.isEmpty()) "No existing lists." else
+            existingLists.joinToString("\n") { "- ${it.title} [id=${it.id}]" }
+        val firstDateStr = firstParsedDate?.toString() ?: "no date"
+
+        return """
+            You are a voice-to-task assistant. The user spoke a rescheduling request, but your first interpretation was wrong.
+
+            CURRENT CONTEXT:
+            Today: $todayDate (${todayDate.dayOfWeek})
+
+            Available lists:
+            $listContext
+
+            WHAT HAPPENED:
+            Original request: "$originalTranscript"
+            You interpreted this as: move task "$targetTaskTitle" to $firstDateStr
+            The user said that was incorrect.
+
+            USER'S CLARIFICATION:
+            "$clarificationTranscript"
+
+            TASK:
+            Re-interpret the user's original request, using the clarification to correct your understanding.
+            - intent must be "reschedule"
+            - tasks[0].title should be the target task name: "$targetTaskTitle"
+            - tasks[0].parentTaskId should remain the same as before (you cannot re-look this up — leave parentTaskId as null if unknown)
+            - tasks[0].dueDate should reflect the corrected date from the clarification
+            - Apply the same temporal reasoning rules (today=$todayDate)
+
+            Return ONLY strict JSON in this schema:
+            {
+              "intent": "reschedule",
+              "tasks": [
+                {
+                  "title": "string",
+                  "dueDate": "YYYY-MM-DD|null",
+                  "preferredTime": "morning|afternoon|evening|null",
+                  "targetListId": "string|null",
+                  "newListName": "null",
+                  "parentTaskId": "null",
+                  "confidence": 0.0,
+                  "duplicateOf": "null"
+                }
+              ],
+              "clarification": "string|null"
+            }
+
+            No markdown. No commentary. Just the JSON.
         """.trimIndent()
     }
 
