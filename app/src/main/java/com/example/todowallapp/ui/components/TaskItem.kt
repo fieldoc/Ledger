@@ -209,11 +209,6 @@ private fun TaskItemContent(
         animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
         label = "taskBorderColor"
     )
-    val glowElevation by animateDpAsState(
-        targetValue = if (isSelected && !isAmbientMode) 24.dp else 0.dp,
-        animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
-        label = "taskGlowElevation"
-    )
     val completedAlpha by animateFloatAsState(
         targetValue = if (task.isCompleted && !isAmbientMode) 0.35f else 1f,
         animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
@@ -239,124 +234,83 @@ private fun TaskItemContent(
         animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
         label = "urgencyBarColor"
     )
-    val holdProgressArcColor by animateColorAsState(
-        targetValue = if (holdProgressFraction < PROMOTE_THRESHOLD) {
-            taskColors.accentPrimary
-        } else {
-            taskColors.urgencyDueToday
-        },
-        animationSpec = tween(durationMillis = WallAnimations.SHORT),
-        label = "holdProgressArcColor"
-    )
-    
-    val connectingLineColor = if (isChild) colors.textMuted.copy(alpha = 0.3f) else Color.Transparent
-    val shouldUseSelectionLayer = glowElevation > 0.dp && !isAmbientMode
-    val focusBorderColor by animateColorAsState(
-        targetValue = when {
-            !isSelected || isAmbientMode -> Color.Transparent
-            showUrgencyAccent -> animatedUrgencyColor.copy(alpha = 0.45f)
-            else -> colors.accentPrimary.copy(alpha = 0.35f)
-        },
-        animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
-        label = "focusBorderGlow"
-    )
-    val cardContainerModifier = if (shouldUseSelectionLayer) {
-        Modifier
-            .fillMaxWidth()
-            .graphicsLayer { translationY = -1f }
-            .shadow(
-                elevation = glowElevation,
-                shape = cardShape,
-                spotColor = if (showUrgencyAccent) animatedUrgencyColor.copy(alpha = 0.6f) else colors.accentPrimary.copy(alpha = 0.4f),
-                ambientColor = Color.Black.copy(alpha = 0.3f),
-                clip = false
-            )
-            .border(1.5.dp, focusBorderColor, cardShape)
-    } else {
-        Modifier.fillMaxWidth()
+    val connectingLineColor = remember(isChild, colors.textMuted) {
+        if (isChild) colors.textMuted.copy(alpha = 0.3f) else Color.Transparent
     }
 
-    Box(
-        modifier = cardContainerModifier
-            .alpha(completedAlpha)
-            .then(
-                if (isChild) {
-                    Modifier.drawBehind {
-                        val lineX = -(8.dp.toPx())
-                        val strokeWidth = 1.5.dp.toPx()
-                        drawLine(
-                            color = connectingLineColor,
-                            start = Offset(lineX, 0f),
-                            end = Offset(lineX, size.height),
-                            strokeWidth = strokeWidth,
-                            cap = StrokeCap.Round
-                        )
-                    }
-                } else Modifier
-            )
-    ) {
+    val innerContent: @Composable () -> Unit = {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .graphicsLayer {
-                    shape = cardShape
-                    clip = true
-                }
-                .combinedClickable(
-                    role = Role.Checkbox,
-                    onClickLabel = if (task.isCompleted) "Mark task as incomplete" else "Mark task as complete",
-                    onClick = onClick,
-                    onLongClick = onLongClick,
-                    onLongClickLabel = if (onLongClick != null) "Show task options" else null
+                .alpha(completedAlpha)
+                .then(
+                    if (isChild) {
+                        Modifier.drawBehind {
+                            val lineX = -(8.dp.toPx())
+                            val strokeWidth = 1.5.dp.toPx()
+                            drawLine(
+                                color = connectingLineColor,
+                                start = Offset(lineX, 0f),
+                                end = Offset(lineX, size.height),
+                                strokeWidth = strokeWidth,
+                                cap = StrokeCap.Round
+                            )
+                        }
+                    } else Modifier
                 )
-                .background(cardBackground)
-                .border(1.dp, cardBorderColor, cardShape)
-                .alpha(contentAlpha)
         ) {
-            // Rim Gloss (1dp highlight)
-            if (!isAmbientMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        shape = cardShape
+                        clip = true
+                    }
+                    .combinedClickable(
+                        role = Role.Checkbox,
+                        onClickLabel = if (task.isCompleted) "Mark task as incomplete" else "Mark task as complete",
+                        onClick = onClick,
+                        onLongClick = onLongClick,
+                        onLongClickLabel = if (onLongClick != null) "Show task options" else null
+                    )
+                    .background(cardBackground)
+                    .border(1.dp, cardBorderColor, cardShape)
+                    .alpha(contentAlpha)
+            ) {
+                // Rim Gloss (1dp highlight)
+                if (!isAmbientMode) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .height(1.5.dp)
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        Color.Transparent,
+                                        if (showUrgencyAccent) animatedUrgencyColor.copy(alpha = 0.4f) else Color(0x33FFFFFF),
+                                        Color.Transparent
+                                    )
+                                )
+                            )
+                    )
+                }
+
+                // Temperature-based Urgency Line
                 Box(
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .height(1.5.dp)
+                        .fillMaxHeight()
+                        .width(8.dp)
+                        .align(Alignment.CenterStart)
+                        .alpha(animatedUrgencyAlpha)
                         .background(
-                            Brush.horizontalGradient(
-                                listOf(
-                                    Color.Transparent, 
-                                    if (showUrgencyAccent) animatedUrgencyColor.copy(alpha = 0.4f) else Color(0x33FFFFFF), 
-                                    Color.Transparent
-                                )
+                            brush = Brush.verticalGradient(
+                                colors = listOf(animatedUrgencyColor, animatedUrgencyColor.copy(alpha = 0.2f))
                             )
                         )
                 )
-            }
 
-            // Temperature-based Urgency Line
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(8.dp)
-                    .align(Alignment.CenterStart)
-                    .alpha(animatedUrgencyAlpha)
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(animatedUrgencyColor, animatedUrgencyColor.copy(alpha = 0.2f))
-                        )
-                    )
-            )
-            
-            if (isSelected && holdProgressFraction > 0f) {
-                HoldProgressArc(
-                    progress = holdProgressFraction,
-                    color = holdProgressArcColor,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 12.dp, end = 12.dp)
-                )
-            }
-
-            Row(
+                Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -462,6 +416,85 @@ private fun TaskItemContent(
                     center = checkboxCenter
                 )
             }
+        }
+    }
+    }
+
+    if (isSelected) {
+        SelectedTaskDecorations(
+            isAmbientMode = isAmbientMode,
+            showUrgencyAccent = showUrgencyAccent,
+            urgencyColor = animatedUrgencyColor,
+            holdProgressFraction = holdProgressFraction,
+            cardShape = cardShape,
+            content = innerContent
+        )
+    } else {
+        Box(modifier = Modifier.fillMaxWidth()) { innerContent() }
+    }
+}
+
+@Composable
+private fun SelectedTaskDecorations(
+    isAmbientMode: Boolean,
+    showUrgencyAccent: Boolean,
+    urgencyColor: Color,
+    holdProgressFraction: Float,
+    cardShape: RoundedCornerShape,
+    content: @Composable () -> Unit
+) {
+    val colors = LocalWallColors.current
+    val glowElevation by animateDpAsState(
+        targetValue = if (!isAmbientMode) 24.dp else 0.dp,
+        animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
+        label = "taskGlowElevation"
+    )
+    val focusBorderColor by animateColorAsState(
+        targetValue = when {
+            isAmbientMode -> Color.Transparent
+            showUrgencyAccent -> urgencyColor.copy(alpha = 0.45f)
+            else -> colors.accentPrimary.copy(alpha = 0.35f)
+        },
+        animationSpec = tween(durationMillis = WallAnimations.MEDIUM),
+        label = "focusBorderGlow"
+    )
+    val holdProgressArcColor by animateColorAsState(
+        targetValue = if (holdProgressFraction < PROMOTE_THRESHOLD) {
+            colors.accentPrimary
+        } else {
+            colors.urgencyDueToday
+        },
+        animationSpec = tween(durationMillis = WallAnimations.SHORT),
+        label = "holdProgressArcColor"
+    )
+
+    val shouldShowGlow = glowElevation > 0.dp && !isAmbientMode
+    Box(
+        modifier = if (shouldShowGlow) {
+            Modifier
+                .fillMaxWidth()
+                .graphicsLayer { translationY = -1f }
+                .shadow(
+                    elevation = glowElevation,
+                    shape = cardShape,
+                    spotColor = if (showUrgencyAccent) urgencyColor.copy(alpha = 0.6f) else colors.accentPrimary.copy(alpha = 0.4f),
+                    ambientColor = Color.Black.copy(alpha = 0.3f),
+                    clip = false
+                )
+                .border(1.5.dp, focusBorderColor, cardShape)
+        } else {
+            Modifier.fillMaxWidth()
+        }
+    ) {
+        content()
+        if (holdProgressFraction > 0f) {
+            HoldProgressArc(
+                progress = holdProgressFraction,
+                color = holdProgressArcColor,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 12.dp)
+            )
         }
     }
 }
