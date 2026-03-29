@@ -2,6 +2,9 @@ package com.example.todowallapp.capture.repository
 
 import android.util.Base64
 import com.example.todowallapp.capture.model.ParsedCapture
+import com.example.todowallapp.data.model.BlockCategory
+import com.example.todowallapp.data.model.DayPlan
+import com.example.todowallapp.data.model.PlanBlock
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -13,6 +16,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 private const val GEMINI_BASE_URL =
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
@@ -586,6 +590,216 @@ class GeminiCaptureRepository(
         if (element.isJsonNull) return null
         val raw = element.asString.trim()
         return raw.takeUnless { it.isEmpty() || it.equals("null", ignoreCase = true) }
+    }
+
+    // ── Day Organizer prompts ──────────────────────────────────────────
+
+    fun buildDayPlanPrompt(
+        rawTranscription: String,
+        existingEvents: List<String>,
+        existingTasks: List<ExistingTaskRef>,
+        targetDate: LocalDate,
+        currentTime: LocalTime
+    ): String {
+        val eventsBlock = if (existingEvents.isEmpty()) "No existing events."
+            else existingEvents.joinToString("\n") { "- $it" }
+
+        val tasksBlock = if (existingTasks.isEmpty()) "No existing tasks."
+            else existingTasks.take(40).joinToString("\n") { "- ${it.title} (list: ${it.listId})" }
+
+        val timeContext = if (targetDate == LocalDate.now()) {
+            "Start scheduling from ${currentTime.format(DateTimeFormatter.ofPattern("HH:mm"))} (round to next half-hour)."
+        } else {
+            "Start scheduling from 07:00 (morning)."
+        }
+
+        return """
+You are a day planning assistant. The user described what they want to accomplish today.
+Produce a time-blocked schedule as a JSON object.
+
+TARGET DATE: $targetDate
+CURRENT TIME: ${currentTime.format(DateTimeFormatter.ofPattern("HH:mm"))}
+$timeContext
+
+EXISTING CALENDAR EVENTS (DO NOT move or modify these — schedule around them):
+$eventsBlock
+
+EXISTING GOOGLE TASKS (for reference — match by name if the user mentions one):
+$tasksBlock
+
+USER'S REQUEST:
+"$rawTranscription"
+
+RULES:
+1. NEVER move or modify existing calendar events. Include them in the output with isExistingEvent=true.
+2. Categorize each NEW block: ACTIVE (cognitively demanding), PASSIVE (low-attention, may need proximity), ERRAND (location-based), SOCIAL (calls, meetings), LEISURE (reading, relaxation).
+3. Energy curve: schedule ACTIVE tasks in the morning (before noon), PASSIVE/LEISURE in the evening. ERRAND blocks should cluster together to minimize travel.
+4. For PASSIVE tasks with follow-up (e.g., laundry needs changeover), add a notes field and schedule a brief follow-up block at the appropriate time.
+5. Estimate durations reasonably. If the user provided durations, use them. Common defaults: dog walk 30min, run 30-45min, bank 30min, grocery 45min, phone call 20-30min.
+6. If the user mentioned an existing Google Task by name (fuzzy match), set sourceTaskId to the task ID and sourceTaskListId to the list ID. Otherwise leave null.
+7. Leave at least 15 minutes buffer between blocks that require location changes.
+8. Return confidence 0.0-1.0 for the overall plan. If confidence < 0.5, add a "warning" field explaining uncertainty.
+9. The summary should be concise: "N blocks, M new — key insight" (e.g., "8 blocks, 6 new — errands clustered at 1pm").
+10. Do NOT use emoji in titles. Plain text only.
+
+RESPONSE FORMAT (strict JSON):
+{
+  "targetDate": "YYYY-MM-DD",
+  "confidence": 0.0-1.0,
+  "warning": null,
+  "summary": "string",
+  "blocks": [
+    {
+      "title": "string",
+      "startTime": "HH:mm",
+      "endTime": "HH:mm",
+      "category": "ACTIVE|PASSIVE|ERRAND|SOCIAL|LEISURE|EXISTING_EVENT",
+      "isExistingEvent": false,
+      "existingEventId": null,
+      "notes": null,
+      "sourceTaskId": null,
+      "sourceTaskListId": null
+    }
+  ]
+}
+""".trimIndent()
+    }
+
+    fun buildPlanAdjustmentPrompt(
+        adjustmentRequest: String,
+        previousPlanJson: String,
+        existingEvents: List<String>,
+        existingTasks: List<ExistingTaskRef>,
+        targetDate: LocalDate,
+        currentTime: LocalTime
+    ): String {
+        val basePrompt = buildDayPlanPrompt(
+            rawTranscription = adjustmentRequest,
+            existingEvents = existingEvents,
+            existingTasks = existingTasks,
+            targetDate = targetDate,
+            currentTime = currentTime
+        )
+
+        return """
+$basePrompt
+
+IMPORTANT — ADJUSTMENT MODE:
+The user already has a plan and wants to modify it. Here is the current plan:
+
+$previousPlanJson
+
+Apply the user's requested changes while keeping the rest of the plan intact.
+Re-optimize timing if the change cascades (e.g., moving a block earlier frees a later slot).
+Return the COMPLETE updated plan, not just the changed blocks.
+""".trimIndent()
+    }
+
+    fun parseDayPlanResponse(responseJson: String, targetDate: LocalDate): DayPlan {
+        val root = org.json.JSONObject(responseJson)
+
+        val parsedDate = try {
+            LocalDate.parse(root.getString("targetDate"))
+        } catch (_: Exception) { targetDate }
+
+        val confidence = root.optDouble("confidence", 0.7).toFloat()
+        val warning = root.optString("warning", "").ifBlank { null }
+        val summary = root.optString("summary", "Plan ready")
+
+        val blocksArray = root.getJSONArray("blocks")
+        val blocks = (0 until blocksArray.length()).map { i ->
+            val obj = blocksArray.getJSONObject(i)
+            val startTime = LocalTime.parse(obj.getString("startTime"), DateTimeFormatter.ofPattern("HH:mm"))
+            val endTime = LocalTime.parse(obj.getString("endTime"), DateTimeFormatter.ofPattern("HH:mm"))
+
+            PlanBlock(
+                title = obj.getString("title"),
+                startTime = parsedDate.atTime(startTime),
+                endTime = parsedDate.atTime(endTime),
+                category = try {
+                    BlockCategory.valueOf(obj.getString("category"))
+                } catch (_: Exception) { BlockCategory.ACTIVE },
+                isExistingEvent = obj.optBoolean("isExistingEvent", false),
+                existingEventId = obj.optString("existingEventId", "").ifBlank { null },
+                notes = obj.optString("notes", "").ifBlank { null },
+                sourceTaskId = obj.optString("sourceTaskId", "").ifBlank { null },
+                sourceTaskListId = obj.optString("sourceTaskListId", "").ifBlank { null }
+            )
+        }
+
+        return DayPlan(
+            targetDate = parsedDate,
+            blocks = blocks.sortedBy { it.startTime },
+            summary = summary,
+            confidence = confidence,
+            warning = warning
+        )
+    }
+
+    /**
+     * Call Gemini for day planning. Uses gemini-2.5-flash (stronger reasoning than lite).
+     * Returns the raw JSON text from the response.
+     */
+    suspend fun callGeminiForDayPlan(apiKey: String, prompt: String): String = withContext(Dispatchers.IO) {
+        val model = "gemini-2.5-flash"
+        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+
+        val requestBody = org.json.JSONObject().apply {
+            put("contents", org.json.JSONArray().put(
+                org.json.JSONObject().put("parts", org.json.JSONArray().put(
+                    org.json.JSONObject().put("text", prompt)
+                ))
+            ))
+            put("generationConfig", org.json.JSONObject().apply {
+                put("temperature", 0.3)
+                put("responseMimeType", "application/json")
+            })
+        }
+
+        var lastException: Exception? = null
+        val retryDelays = listOf(2000L, 4000L)
+
+        for (attempt in 0..2) {
+            try {
+                val connection = (java.net.URL(endpoint).openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 30_000
+                    readTimeout = 45_000
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                }
+
+                connection.outputStream.use { os ->
+                    os.write(requestBody.toString().toByteArray())
+                }
+
+                val responseCode = connection.responseCode
+                if (responseCode in listOf(429, 500, 503) && attempt < 2) {
+                    lastException = Exception("HTTP $responseCode")
+                    Thread.sleep(retryDelays[attempt])
+                    continue
+                }
+
+                val responseBody = if (responseCode in 200..299) {
+                    connection.inputStream.bufferedReader().readText()
+                } else {
+                    val errorBody = connection.errorStream?.bufferedReader()?.readText() ?: "No error body"
+                    throw Exception("Gemini API error $responseCode: ${errorBody.take(200)}")
+                }
+
+                return@withContext extractTextFromGeminiResponse(responseBody)
+
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < 2 && (e.message?.contains("429") == true || e.message?.contains("50") == true)) {
+                    Thread.sleep(retryDelays[attempt])
+                    continue
+                }
+                throw e
+            }
+        }
+
+        throw lastException ?: Exception("Day plan request failed after retries")
     }
 }
 
