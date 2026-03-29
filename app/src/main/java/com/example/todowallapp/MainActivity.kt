@@ -72,6 +72,7 @@ import com.example.todowallapp.ui.theme.LedgerTheme
 import com.example.todowallapp.viewmodel.PhoneCaptureViewModel
 import com.example.todowallapp.viewmodel.TaskWallViewModel
 import com.example.todowallapp.viewmodel.ThemeMode
+import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -394,6 +395,7 @@ private fun WallModeContent(
     val geminiKeyPresent by viewModel.geminiKeyPresent.collectAsState()
     val isValidatingGeminiKey by viewModel.isValidatingGeminiKey.collectAsState()
     val geminiKeyError by viewModel.geminiKeyError.collectAsState()
+    val dayOrganizerState by viewModel.dayOrganizerState.collectAsState()
     var weatherApiKeyPresent by remember { mutableStateOf(weatherKeyStore.hasApiKey()) }
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
@@ -612,6 +614,15 @@ private fun WallModeContent(
                         onSignOut = viewModel::signOut,
                         onRefresh = viewModel::refresh,
                         onDismissCalendarError = viewModel::clearCalendarError,
+                        dayOrganizerState = dayOrganizerState,
+                        onStartDayOrganizer = { viewModel.startDayOrganizer() },
+                        onStopDayOrganizerListening = { viewModel.stopDayOrganizerListening() },
+                        onAcceptDayPlan = { viewModel.acceptDayPlan() },
+                        onAdjustDayPlan = { viewModel.adjustDayPlan() },
+                        onCancelDayOrganizer = { viewModel.cancelDayOrganizer() },
+                        onRetryDayOrganizer = { viewModel.retryDayOrganizer() },
+                        onDayOrganizerFocusChange = { index -> viewModel.setDayOrganizerFocus(index) },
+                        voiceStateIdle = voiceState is VoiceInputState.Idle,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

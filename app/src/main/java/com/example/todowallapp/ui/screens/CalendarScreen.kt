@@ -1,6 +1,17 @@
 package com.example.todowallapp.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.core.content.ContextCompat
+import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.data.model.WeatherCondition
+import com.example.todowallapp.ui.components.DayOrganizerOverlay
 import com.example.todowallapp.ui.theme.LocalWallColors
 
 import androidx.activity.compose.BackHandler
@@ -145,8 +156,39 @@ fun CalendarScreen(
     onSwitchMode: () -> Unit = {},
     onSignOut: () -> Unit = {},
     onRefresh: (() -> Unit)? = null,
+    // Day Organizer
+    dayOrganizerState: DayOrganizerState = DayOrganizerState.Idle,
+    onStartDayOrganizer: () -> Unit = {},
+    onStopDayOrganizerListening: () -> Unit = {},
+    onAcceptDayPlan: () -> Unit = {},
+    onAdjustDayPlan: () -> Unit = {},
+    onCancelDayOrganizer: () -> Unit = {},
+    onRetryDayOrganizer: () -> Unit = {},
+    onDayOrganizerFocusChange: (Int) -> Unit = {},
+    voiceStateIdle: Boolean = true,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) onStartDayOrganizer()
+    }
+
+    val startDayOrganizerWithPermission = remember(onStartDayOrganizer) {
+        {
+            when (PackageManager.PERMISSION_GRANTED) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) -> {
+                    onStartDayOrganizer()
+                }
+                else -> {
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
+        }
+    }
+
     val focusRequester = remember { FocusRequester() }
     val slots = remember(selectedDate, events) { buildHalfHourSlots(selectedDate, events) }
     val weekStart = remember(selectedDate) { selectedDate.with(DayOfWeek.MONDAY) }
@@ -226,6 +268,39 @@ fun CalendarScreen(
             .focusable()
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+
+                // Day Organizer active — consume all encoder input
+                val orgState = dayOrganizerState
+                if (orgState !is DayOrganizerState.Idle) {
+                    if (keyEvent.key in listOf(Key.Enter, Key.NumPadEnter, Key.Spacebar)) {
+                        when (orgState) {
+                            is DayOrganizerState.Listening -> onStopDayOrganizerListening()
+                            is DayOrganizerState.Adjusting -> onStopDayOrganizerListening()
+                            is DayOrganizerState.PlanReady -> {
+                                when (orgState.focusedAction) {
+                                    0 -> onAcceptDayPlan()
+                                    1 -> onAdjustDayPlan()
+                                    2 -> onCancelDayOrganizer()
+                                }
+                            }
+                            is DayOrganizerState.Error -> {
+                                if (orgState.canRetry) onRetryDayOrganizer() else onCancelDayOrganizer()
+                            }
+                            else -> {}
+                        }
+                    } else if (keyEvent.key in listOf(Key.DirectionRight, Key.DirectionDown)) {
+                        if (orgState is DayOrganizerState.PlanReady) {
+                            val next = (orgState.focusedAction + 1).coerceAtMost(2)
+                            onDayOrganizerFocusChange(next)
+                        }
+                    } else if (keyEvent.key in listOf(Key.DirectionLeft, Key.DirectionUp)) {
+                        if (orgState is DayOrganizerState.PlanReady) {
+                            val prev = (orgState.focusedAction - 1).coerceAtLeast(0)
+                            onDayOrganizerFocusChange(prev)
+                        }
+                    }
+                    return@onKeyEvent true  // Consume all input when overlay is active
+                }
 
                 // Settings panel open — encoder click dismisses, all other keys consumed
                 if (showSettings) {
@@ -997,6 +1072,28 @@ fun CalendarScreen(
                 onDismiss = { showSettings = false }
             )
         }
+
+        // Day Organizer Voice FAB
+        if (!isLoading && voiceStateIdle && geminiKeyPresent &&
+            dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 32.dp, bottom = 32.dp)
+            ) {
+                VoiceFab(onClick = startDayOrganizerWithPermission)
+            }
+        }
+
+        // Day Organizer Overlay
+        DayOrganizerOverlay(
+            state = dayOrganizerState,
+            onStopListening = onStopDayOrganizerListening,
+            onAccept = onAcceptDayPlan,
+            onAdjust = onAdjustDayPlan,
+            onCancel = onCancelDayOrganizer,
+            onRetry = onRetryDayOrganizer
+        )
     } // end outer Box
 
     BackHandler(enabled = showSettings) { showSettings = false }
@@ -1161,6 +1258,34 @@ private fun CalendarSettingsButton(isFocused: Boolean, onClick: () -> Unit) {
             imageVector = Icons.Outlined.Settings,
             contentDescription = "Settings",
             tint = if (isFocused) colors.accentPrimary else colors.textSecondary,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
+
+@Composable
+private fun VoiceFab(onClick: () -> Unit) {
+    val colors = LocalWallColors.current
+    val interactionSource = remember { MutableInteractionSource() }
+    Box(
+        modifier = Modifier
+            .size(56.dp)
+            .clip(CircleShape)
+            .background(colors.accentPrimary.copy(alpha = 0.85f))
+            .border(1.dp, colors.accentPrimary, CircleShape)
+            .clickable(
+                onClick = onClick,
+                interactionSource = interactionSource,
+                indication = null,
+                role = Role.Button,
+                onClickLabel = "Plan your day with voice"
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Mic,
+            contentDescription = "Day organizer voice input",
+            tint = colors.surfaceBlack,
             modifier = Modifier.size(24.dp)
         )
     }
