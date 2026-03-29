@@ -349,13 +349,15 @@ fun TaskWallScreen(
         }
     }
 
-    val startVoiceWithPermission = {
-        when (PackageManager.PERMISSION_GRANTED) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) -> {
-                onStartVoice()
-            }
-            else -> {
-                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    val startVoiceWithPermission = remember(onStartVoice) {
+        {
+            when (PackageManager.PERMISSION_GRANTED) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) -> {
+                    onStartVoice()
+                }
+                else -> {
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
             }
         }
     }
@@ -389,7 +391,7 @@ fun TaskWallScreen(
             }
         }
     }
-    val selectedFolderId by remember(selectedFocusKey, focusOrder, focusIndexByKey) {
+    val selectedFolderId by remember(focusOrder, focusIndexByKey) {
         derivedStateOf {
             selectedFocusKey
                 ?.let { key -> focusIndexByKey[key] }
@@ -423,7 +425,7 @@ fun TaskWallScreen(
     }
 
     // Breadcrumb: derive current folder name and task title from focus state
-    val breadcrumbInfo by remember(selectedFocusKey, focusOrder, focusIndexByKey, sectionModels) {
+    val breadcrumbInfo by remember(focusOrder, focusIndexByKey, sectionModels) {
         derivedStateOf {
             val node = selectedFocusKey
                 ?.let { key -> focusIndexByKey[key] }
@@ -913,7 +915,7 @@ fun TaskWallScreen(
                     else -> false
                 }
             }
-            .alpha(screenAlpha)
+            .graphicsLayer { alpha = screenAlpha }
     ) {
         Column(
             modifier = Modifier
@@ -1029,7 +1031,7 @@ fun TaskWallScreen(
                                 isAmbientMode = isAmbientMode,
                                 scheduledTaskIds = scheduledTaskIds,
                                 scheduledTaskTimes = scheduledTaskTimes,
-                                holdProgressFraction = holdProgressFraction,
+                                holdProgressFraction = if (selectedFolderId == model.taskList.id) holdProgressFraction else 0f,
                                 onHeaderClick = {
                                     wakeUp()
                                     isViewSwitcherFocused = false
@@ -1147,11 +1149,17 @@ fun TaskWallScreen(
             ) {
                 when (val state = voiceState) {
                     is VoiceInputState.Listening -> {
-                        WaveformVisualizer(
-                            amplitudeLevel = state.amplitudeLevel,
-                            isActive = true,
-                            modifier = Modifier.size(200.dp)
-                        )
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = voiceState is VoiceInputState.Listening,
+                            enter = fadeIn(tween(WallAnimations.SHORT)),
+                            exit = fadeOut(tween(WallAnimations.SHORT))
+                        ) {
+                            WaveformVisualizer(
+                                amplitudeLevel = state.amplitudeLevel,
+                                isActive = true,
+                                modifier = Modifier.size(200.dp)
+                            )
+                        }
                     }
                     is VoiceInputState.Processing -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1419,7 +1427,7 @@ private fun FolderSection(
                 } else Modifier
             )
             .clip(sectionShape)
-            .background(sectionBackground)
+            .drawBehind { drawRect(sectionBackground) }
             .then(if (isExpanded && !isAmbientMode) Modifier.border(1.dp, colors.rimGloss, sectionShape) else Modifier)
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -1495,7 +1503,7 @@ private fun FolderSection(
                 enter = expandVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow)) + fadeIn(tween(WallAnimations.MEDIUM)),
                 exit = shrinkVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)) + fadeOut(tween(WallAnimations.SHORT))
             ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 16.dp).animateContentSize(animationSpec = tween(WallAnimations.MEDIUM)), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     model.pendingGroups.forEach { group ->
                         ParentChildGroup(group, folderId, selectedFocusKey, isAmbientMode, isExpanded, scheduledTaskIds, scheduledTaskTimes, holdProgressFraction, onParentClick, onTaskToggle, onTaskLongClick, onOpenScheduledTask)
                     }

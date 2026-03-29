@@ -25,8 +25,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -95,7 +95,7 @@ fun WaveformVisualizer(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .size(200.dp)
-            .alpha(activeAlpha)
+            .graphicsLayer { alpha = activeAlpha }
     ) {
         // Pulse rings and center dot
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -103,8 +103,7 @@ fun WaveformVisualizer(
             val baseRadius = 24.dp.toPx()
 
             // Draw 3 expanding pulse rings
-            val rings = listOf(ring1, ring2, ring3)
-            for (scale in rings) {
+            for (scale in floatArrayOf(ring1, ring2, ring3)) {
                 val normalizedProgress = ((scale - 0.8f) / 1.7f).coerceIn(0f, 1f)
                 val ringAlpha = (1f - normalizedProgress) * 0.06f
 
