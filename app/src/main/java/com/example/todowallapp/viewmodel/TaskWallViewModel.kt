@@ -237,7 +237,7 @@ class TaskWallViewModel(
      * Load saved settings from DataStore
      */
     private fun loadSettings() {
-        viewModelScope.launch {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val prefs = try {
                 context.dataStore.data.first()
             } catch (e: Exception) {
@@ -1074,25 +1074,23 @@ class TaskWallViewModel(
         return calendarRepository.getEventsForDateRange(start, end, calendarId).fold(
             onSuccess = { grouped ->
                 val allEvents = grouped.values.flatten()
-                val promotedEventIdsByTask = allEvents
-                    .asSequence()
-                    .filter { it.isPromotedTask && !it.sourceTaskId.isNullOrBlank() }
-                    .associate { it.sourceTaskId!! to it.id }
-                val promotedStartTimesByTask = allEvents
-                    .asSequence()
-                    .filter { it.isPromotedTask && !it.sourceTaskId.isNullOrBlank() }
-                    .mapNotNull { event ->
-                        val taskId = event.sourceTaskId ?: return@mapNotNull null
-                        val startTime = event.startDateTime ?: event.allDayStartDate?.atStartOfDay() ?: return@mapNotNull null
-                        taskId to startTime
-                    }
-                    .toMap()
+                val promotedEventIds = mutableMapOf<String, String>()
+                val promotedStartTimes = mutableMapOf<String, LocalDateTime>()
+                for (event in allEvents) {
+                    val taskId = event.sourceTaskId
+                    if (!event.isPromotedTask || taskId.isNullOrBlank()) continue
+                    promotedEventIds[taskId] = event.id
+                    val startTime = event.startDateTime
+                        ?: event.allDayStartDate?.atStartOfDay()
+                        ?: continue
+                    promotedStartTimes[taskId] = startTime
+                }
                 _uiState.update { state ->
                     val mergedEventIds = state.scheduledTaskEventIds.toMutableMap().apply {
-                        putAll(promotedEventIdsByTask)
+                        putAll(promotedEventIds)
                     }
                     val mergedStartTimes = state.scheduledTaskTimes.toMutableMap().apply {
-                        putAll(promotedStartTimesByTask)
+                        putAll(promotedStartTimes)
                     }
                     state.copy(
                         eventsForRange = grouped,
@@ -1461,9 +1459,10 @@ class TaskWallViewModel(
     }
 
     private fun normalizeTaskLists(taskLists: List<TaskListWithTasks>): List<TaskListWithTasks> {
+        val today = LocalDate.now()
         return sortTaskListsByNearestDueDate(
             taskLists.map { listWithTasks ->
-                listWithTasks.copy(tasks = sortTasksForDisplay(listWithTasks.tasks))
+                listWithTasks.copy(tasks = sortTasksForDisplay(listWithTasks.tasks, today))
             }
         )
     }

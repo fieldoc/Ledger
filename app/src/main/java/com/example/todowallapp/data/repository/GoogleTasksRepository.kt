@@ -99,8 +99,6 @@ class GoogleTasksRepository(
                 // Skip deleted tasks
                 if (googleTask.deleted == true) return@mapNotNull null
 
-                Log.d("TasksRepo", "Task: '${googleTask.title}' parent=${googleTask.parent} position=${googleTask.position}")
-
                 googleTask.toAppTask()
             }.let(::sortTasksForDisplay)
             Log.d("TasksRepo", "Fetched ${tasks.size} tasks from list $taskListId")
