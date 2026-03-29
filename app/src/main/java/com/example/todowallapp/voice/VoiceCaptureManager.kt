@@ -46,7 +46,7 @@ class VoiceCaptureManager(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private companion object {
-        const val LISTENING_TIMEOUT_MS = 30_000L
+        const val LISTENING_TIMEOUT_MS = 120_000L
     }
 
     private val timeoutRunnable = Runnable {
@@ -77,9 +77,9 @@ class VoiceCaptureManager(private val context: Context) {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                // Increase silence timeout to 2 seconds
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+                // Generous silence timeouts so the user can pause to think mid-utterance
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
             }
 
             var currentAmplitude = 0f
