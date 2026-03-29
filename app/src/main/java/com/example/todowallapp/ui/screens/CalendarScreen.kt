@@ -71,7 +71,10 @@ import com.example.todowallapp.ui.components.ViewSwitcherPill
 import com.example.todowallapp.ui.components.WeekStrip
 import com.example.todowallapp.viewmodel.ThemeMode
 import com.example.todowallapp.ui.components.buildHalfHourSlots
-import com.example.todowallapp.ui.components.taskPickerRowCount
+import com.example.todowallapp.ui.components.taskPickerFocusableCount
+import com.example.todowallapp.ui.components.taskPickerHeaderFocusIndex
+import com.example.todowallapp.ui.components.taskPickerResolveHeaderListIndex
+import com.example.todowallapp.ui.components.taskPickerResolveTask
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
 import com.example.todowallapp.ui.theme.WallAnimations
 import com.example.todowallapp.ui.theme.WallShapes
@@ -165,6 +168,7 @@ fun CalendarScreen(
     var showTaskPicker by remember { mutableStateOf(false) }
     var taskPickerSlotTime by remember { mutableStateOf<LocalDateTime?>(null) }
     var taskPickerFocusIndex by remember { mutableIntStateOf(0) }
+    var taskPickerExpandedList by remember { mutableIntStateOf(0) }
     var pendingDragRange by remember { mutableStateOf<SlotDragRange?>(null) }
     var showEventAction by remember { mutableStateOf(false) }
     var eventActionTarget by remember { mutableStateOf<CalendarEvent?>(null) }
@@ -364,6 +368,7 @@ fun CalendarScreen(
                                     showTaskPicker = true
                                     taskPickerSlotTime = slot.start
                                     taskPickerFocusIndex = 0
+                                    taskPickerExpandedList = 0
                                 }
                             }
                             true
@@ -374,42 +379,89 @@ fun CalendarScreen(
 
                 // Task picker overlay intercepts keys when visible
                 if (showTaskPicker) {
-                    val rowCount = taskPickerRowCount(pendingTasksByList)
+                    val focusCount = taskPickerFocusableCount(pendingTasksByList, taskPickerExpandedList)
                     when (keyEvent.key) {
                         Key.DirectionUp, Key.DirectionRight -> {
                             if (taskPickerFocusIndex > 0) {
                                 taskPickerFocusIndex -= 1
+                                // Auto-expand if focus lands on a different list header
+                                val headerIdx = taskPickerResolveHeaderListIndex(
+                                    pendingTasksByList, taskPickerExpandedList, taskPickerFocusIndex
+                                )
+                                if (headerIdx >= 0 && headerIdx != taskPickerExpandedList) {
+                                    val oldExpanded = taskPickerExpandedList
+                                    taskPickerExpandedList = headerIdx
+                                    // Recalc focus: we moved up onto a header that just expanded.
+                                    // The header's position shifts because the old list collapsed.
+                                    taskPickerFocusIndex = taskPickerHeaderFocusIndex(
+                                        pendingTasksByList, headerIdx, headerIdx
+                                    )
+                                }
                             }
                             return@onKeyEvent true
                         }
                         Key.DirectionDown, Key.DirectionLeft -> {
-                            if (taskPickerFocusIndex < rowCount - 1) {
+                            if (taskPickerFocusIndex < focusCount - 1) {
                                 taskPickerFocusIndex += 1
+                                val headerIdx = taskPickerResolveHeaderListIndex(
+                                    pendingTasksByList, taskPickerExpandedList, taskPickerFocusIndex
+                                )
+                                if (headerIdx >= 0 && headerIdx != taskPickerExpandedList) {
+                                    taskPickerExpandedList = headerIdx
+                                    taskPickerFocusIndex = taskPickerHeaderFocusIndex(
+                                        pendingTasksByList, headerIdx, headerIdx
+                                    )
+                                }
                             }
                             return@onKeyEvent true
                         }
                         Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                            // Find the task at focusedIndex
-                            var count = 0
-                            val selectedTask = pendingTasksByList.firstNotNullOfOrNull { (_, tasks) ->
-                                tasks.firstOrNull { _ ->
-                                    val match = count == taskPickerFocusIndex
-                                    count++
-                                    match
+                            val selectedTask = taskPickerResolveTask(
+                                pendingTasksByList, taskPickerExpandedList, taskPickerFocusIndex
+                            )
+                            if (selectedTask != null) {
+                                // Task row confirmed — schedule it
+                                val time = taskPickerSlotTime
+                                if (time != null) {
+                                    val dragDuration = pendingDragRange?.durationMinutes
+                                    if (dragDuration != null && dragDuration > 0) {
+                                        onScheduleTaskForRange(selectedTask, time, dragDuration)
+                                    } else {
+                                        onScheduleTaskAtTime(selectedTask, time)
+                                    }
+                                }
+                                showTaskPicker = false
+                                taskPickerSlotTime = null
+                                taskPickerFocusIndex = 0
+                                taskPickerExpandedList = 0
+                                pendingDragRange = null
+                            } else {
+                                // Header confirmed — move focus to first task in this list
+                                val headerIdx = taskPickerResolveHeaderListIndex(
+                                    pendingTasksByList, taskPickerExpandedList, taskPickerFocusIndex
+                                )
+                                if (headerIdx >= 0) {
+                                    taskPickerExpandedList = headerIdx
+                                    taskPickerFocusIndex = taskPickerHeaderFocusIndex(
+                                        pendingTasksByList, headerIdx, headerIdx
+                                    ) + 1 // move past header to first task
                                 }
                             }
-                            if (selectedTask != null && taskPickerSlotTime != null) {
-                                onScheduleTaskAtTime(selectedTask, taskPickerSlotTime!!)
-                            }
+                            return@onKeyEvent true
+                        }
+                        Key.Escape, Key.Back -> {
                             showTaskPicker = false
                             taskPickerSlotTime = null
                             taskPickerFocusIndex = 0
+                            taskPickerExpandedList = 0
+                            pendingDragRange = null
                             return@onKeyEvent true
                         }
                         else -> {
                             showTaskPicker = false
                             taskPickerSlotTime = null
                             taskPickerFocusIndex = 0
+                            taskPickerExpandedList = 0
                             return@onKeyEvent true
                         }
                     }
@@ -582,6 +634,7 @@ fun CalendarScreen(
                                         showTaskPicker = true
                                         taskPickerSlotTime = slot.start
                                         taskPickerFocusIndex = 0
+                                        taskPickerExpandedList = 0
                                     }
                                     true
                                 }
@@ -747,6 +800,7 @@ fun CalendarScreen(
                                     showTaskPicker = true
                                     taskPickerSlotTime = time
                                     taskPickerFocusIndex = 0
+                                    taskPickerExpandedList = 0
                                 }
                             },
                             onEventActivated = { event ->
@@ -763,6 +817,7 @@ fun CalendarScreen(
                                 showTaskPicker = true
                                 taskPickerSlotTime = range.startTime
                                 taskPickerFocusIndex = 0
+                                taskPickerExpandedList = 0
                             },
                             weatherForecast = weatherForecast,
                             modifier = Modifier.fillMaxSize()
@@ -786,6 +841,7 @@ fun CalendarScreen(
                                         showTaskPicker = true
                                         taskPickerSlotTime = time
                                         taskPickerFocusIndex = 0
+                                        taskPickerExpandedList = 0
                                     }
                                 } else {
                                     onOpenPromotionAt(time)
@@ -805,6 +861,7 @@ fun CalendarScreen(
                                 showTaskPicker = true
                                 taskPickerSlotTime = range.startTime
                                 taskPickerFocusIndex = 0
+                                taskPickerExpandedList = 0
                             },
                             weatherForecast = weatherForecast,
                             isWeatherExpanded = isWeatherExpanded,
@@ -822,7 +879,14 @@ fun CalendarScreen(
         visible = showTaskPicker,
         tasksByList = pendingTasksByList,
         focusedIndex = taskPickerFocusIndex,
+        expandedListIndex = taskPickerExpandedList,
         onFocusIndex = { taskPickerFocusIndex = it },
+        onExpandList = { listIdx ->
+            taskPickerExpandedList = listIdx
+            taskPickerFocusIndex = taskPickerHeaderFocusIndex(
+                pendingTasksByList, listIdx, listIdx
+            )
+        },
         onSelectTask = { task ->
             val time = taskPickerSlotTime
             if (time != null) {
@@ -836,12 +900,14 @@ fun CalendarScreen(
             showTaskPicker = false
             taskPickerSlotTime = null
             taskPickerFocusIndex = 0
+            taskPickerExpandedList = 0
             pendingDragRange = null
         },
         onDismiss = {
             showTaskPicker = false
             taskPickerSlotTime = null
             taskPickerFocusIndex = 0
+            taskPickerExpandedList = 0
             pendingDragRange = null
         }
     )
