@@ -164,6 +164,12 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.abs
 import kotlin.random.Random
 
+private val CONFIRM_KEYS = setOf(Key.Enter, Key.NumPadEnter)
+private val FolderSectionShape = RoundedCornerShape(32.dp)
+private val FolderHeaderShape = RoundedCornerShape(20.dp)
+private val ProgressBarShape = RoundedCornerShape(1.dp)
+private val ViewSwitcherFocusShape = RoundedCornerShape(999.dp)
+
 private data class PendingTaskGroup(
     val parent: Task,
     val children: List<Task>,
@@ -725,7 +731,7 @@ fun TaskWallScreen(
             .focusable()
             .onKeyEvent { keyEvent ->
                 // Undo toast intercept: Enter while undo is visible triggers undo
-                if (undoVisible && keyEvent.type == KeyEventType.KeyUp && keyEvent.key in listOf(Key.Enter, Key.NumPadEnter)) {
+                if (undoVisible && keyEvent.type == KeyEventType.KeyUp && keyEvent.key in CONFIRM_KEYS) {
                     onUndo()
                     return@onKeyEvent true
                 }
@@ -750,7 +756,7 @@ fun TaskWallScreen(
                     return@onKeyEvent true
                 }
                 if (voiceState is VoiceInputState.Error) {
-                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key in listOf(Key.Enter, Key.NumPadEnter)) {
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key in CONFIRM_KEYS) {
                         onDismissVoiceError()
                     }
                     return@onKeyEvent true
@@ -987,7 +993,7 @@ fun TaskWallScreen(
                         },
                         isAmbientMode = isAmbientMode,
                         modifier = if (isViewSwitcherFocused) {
-                            Modifier.border(1.5.dp, colors.accentPrimary.copy(alpha = 0.7f), RoundedCornerShape(999.dp)).padding(1.5.dp)
+                            Modifier.border(1.5.dp, colors.accentPrimary.copy(alpha = 0.7f), ViewSwitcherFocusShape).padding(1.5.dp)
                         } else Modifier
                     )
                 }
@@ -1364,7 +1370,7 @@ private fun FolderSection(
 ) {
     val folderId = model.taskList.id
     val colors = LocalWallColors.current
-    val sectionShape = RoundedCornerShape(32.dp)
+    val sectionShape = FolderSectionShape
     val isHeaderSelected = selectedFocusKey == folderHeaderKey(folderId)
     
     val sectionBackground by animateColorAsState(
@@ -1418,7 +1424,7 @@ private fun FolderSection(
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).clickable(onClick = onHeaderClick).padding(horizontal = 16.dp, vertical = 20.dp),
+                modifier = Modifier.fillMaxWidth().clip(FolderHeaderShape).clickable(onClick = onHeaderClick).padding(horizontal = 16.dp, vertical = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -1471,7 +1477,7 @@ private fun FolderSection(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
                     .height(2.dp)
-                    .clip(RoundedCornerShape(1.dp))
+                    .clip(ProgressBarShape)
                     .background(colors.borderColor)
             ) {
                 Box(

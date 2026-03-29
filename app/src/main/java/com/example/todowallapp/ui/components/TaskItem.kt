@@ -69,6 +69,8 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 private val BadgeTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+private val CardShape = RoundedCornerShape(WallShapes.CardCornerRadius.dp)
+private val EmptyScheduledIds: Set<String> = emptySet()
 private const val PROMOTE_THRESHOLD = 0.4375f
 
 private fun Task.accessibilityDescription(today: LocalDate = LocalDate.now()): String {
@@ -97,7 +99,7 @@ fun TaskItem(
     isSelected: Boolean,
     isChild: Boolean = false,
     isAmbientMode: Boolean = false,
-    scheduledTaskIds: Set<String> = emptySet(),
+    scheduledTaskIds: Set<String> = EmptyScheduledIds,
     scheduledStartTime: LocalDateTime? = null,
     subtaskProgress: SubtaskProgress? = null,
     isExpanded: Boolean = false,
@@ -175,7 +177,7 @@ private fun TaskItemContent(
         label = "ambientContentAlpha"
     )
 
-    val cardShape = RoundedCornerShape(WallShapes.CardCornerRadius.dp)
+    val cardShape = CardShape
     val showUrgencyAccent = !task.isCompleted && urgency != TaskUrgency.NORMAL && !isAmbientMode
     val taskColors = LocalWallColors.current
     val urgencyAccentColor = if (urgency == TaskUrgency.COMPLETED || urgency == TaskUrgency.NORMAL) {

@@ -37,6 +37,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 internal val MonthDayFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM d")
+private val SmallBadgeShape: RoundedCornerShape = RoundedCornerShape(WallShapes.SmallCornerRadius.dp)
 
 @Composable
 internal fun AnimatedTaskCompletion(
@@ -177,11 +178,11 @@ internal fun DueDateBadge(
                 .border(
                     1.dp,
                     LocalWallColors.current.urgencyOverdue,
-                    RoundedCornerShape(WallShapes.SmallCornerRadius.dp)
+                    SmallBadgeShape
                 )
                 .background(
                     LocalWallColors.current.urgencyOverdueSubtle,
-                    shape = RoundedCornerShape(WallShapes.SmallCornerRadius.dp)
+                    shape = SmallBadgeShape
                 )
                 .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
