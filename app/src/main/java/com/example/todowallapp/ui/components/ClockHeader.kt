@@ -58,13 +58,19 @@ fun ClockHeader(
     onSyncClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var currentTime by remember { mutableStateOf(LocalDateTime.now()) }
+    var currentTime by remember {
+        mutableStateOf(LocalDateTime.now().withSecond(0).withNano(0))
+    }
     val colors = LocalWallColors.current
 
     LaunchedEffect(Unit) {
         while (true) {
-            currentTime = LocalDateTime.now()
             delay(1000)
+            val now = LocalDateTime.now()
+            val truncated = now.withSecond(0).withNano(0)
+            if (truncated != currentTime) {
+                currentTime = truncated
+            }
         }
     }
 
@@ -86,7 +92,7 @@ fun ClockHeader(
     val minutesSinceSync = lastSyncTime?.let {
         @Suppress("UNUSED_EXPRESSION")
         syncTextTick
-        ChronoUnit.MINUTES.between(it, LocalDateTime.now())
+        ChronoUnit.MINUTES.between(it, currentTime)
     }
 
     val syncText = minutesSinceSync?.let { mins ->
