@@ -10,6 +10,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.todowallapp.auth.AuthState
 import com.example.todowallapp.auth.GoogleAuthManager
+import com.example.todowallapp.capture.DayOrganizerCoordinator
+import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.capture.RescheduleRetryContext
 import com.example.todowallapp.capture.VoiceParsingCoordinator
 import com.example.todowallapp.capture.repository.ExistingListRef
@@ -185,6 +187,19 @@ class TaskWallViewModel(
     private val voiceParsingCoordinator = VoiceParsingCoordinator(
         voiceCaptureManager, geminiCaptureRepository, geminiKeyStore
     )
+
+    private val dayOrganizerCoordinator by lazy {
+        DayOrganizerCoordinator(
+            voiceCaptureManager = voiceCaptureManager,
+            geminiCaptureRepository = geminiCaptureRepository,
+            geminiKeyStore = geminiKeyStore,
+            calendarRepository = calendarRepository,
+            tasksRepository = tasksRepository
+        )
+    }
+
+    val dayOrganizerState: StateFlow<DayOrganizerState>
+        get() = dayOrganizerCoordinator.state
 
     // Last sync success tracking
     private var syncFeedbackJob: Job? = null
@@ -966,6 +981,99 @@ class TaskWallViewModel(
         return candidateId?.takeIf { id ->
             _uiState.value.taskLists.any { list -> list.id == id }
         }
+    }
+
+    // ── Day Organizer ──────────────────────────────────────────────────
+
+    fun startDayOrganizer() {
+        if (dayOrganizerCoordinator.state.value !is DayOrganizerState.Idle) return
+
+        dayOrganizerCoordinator.startListening(
+            scope = viewModelScope,
+            listProvider = {
+                _uiState.value.taskLists.map { list ->
+                    ExistingListRef(id = list.id, title = list.title)
+                }
+            },
+            taskProvider = {
+                _uiState.value.allTaskLists.flatMap { list ->
+                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
+                        ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
+                    }
+                }.take(40)
+            },
+            eventsProvider = {
+                val today = java.time.LocalDate.now()
+                val events = calendarRepository.getEventsForDateRange(
+                    today, today, _uiState.value.selectedCalendarId
+                ).getOrElse { emptyMap() }
+
+                events[today]?.map { event ->
+                    val timeRange = if (event.isAllDay) "All day"
+                    else "${event.startDateTime?.toLocalTime()?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}-${event.endDateTime?.toLocalTime()?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}"
+                    "$timeRange ${event.title}"
+                } ?: emptyList()
+            },
+            selectedCalendarId = _uiState.value.selectedCalendarId
+        )
+    }
+
+    fun stopDayOrganizerListening() {
+        val state = dayOrganizerCoordinator.state.value
+        when (state) {
+            is DayOrganizerState.Listening -> dayOrganizerCoordinator.stopListening()
+            is DayOrganizerState.Adjusting -> dayOrganizerCoordinator.stopAdjustmentListening()
+            else -> {}
+        }
+    }
+
+    fun acceptDayPlan() {
+        viewModelScope.launch {
+            val result = dayOrganizerCoordinator.acceptPlan()
+            result.fold(
+                onSuccess = { count ->
+                    setTransientMessage("$count events added to your calendar")
+                    loadCalendarRangeInternal(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
+                },
+                onFailure = { error ->
+                    setTransientMessage("Failed to create events: ${error.message}")
+                }
+            )
+            restoreVoicePipelineCallback()
+        }
+    }
+
+    fun adjustDayPlan() {
+        dayOrganizerCoordinator.startAdjustment()
+    }
+
+    fun cancelDayOrganizer() {
+        dayOrganizerCoordinator.cancel()
+        restoreVoicePipelineCallback()
+    }
+
+    fun retryDayOrganizer() {
+        cancelDayOrganizer()
+        startDayOrganizer()
+    }
+
+    private fun restoreVoicePipelineCallback() {
+        voiceParsingCoordinator.configure(
+            scope = viewModelScope,
+            listProvider = {
+                _uiState.value.taskLists.map { list ->
+                    ExistingListRef(id = list.id, title = list.title)
+                }
+            },
+            taskProvider = {
+                _uiState.value.allTaskLists.flatMap { list ->
+                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
+                        ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
+                    }
+                }.take(30)
+            },
+            listIdValidator = ::resolveKnownTaskListId
+        )
     }
 
     fun completeTaskById(taskId: String) {
