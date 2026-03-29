@@ -20,6 +20,7 @@ val AmbientText = Color.White                 // Ambient mode (unchanged)
 val AccentPrimary = Color(0xFF80CBC4)         // Teal focus/action accent
 val AccentSubtle = Color(0xFFB2DFDB)          // Subtle teal for backgrounds
 val AccentWarm = Color(0xFFCF8E8E)            // Soft rose for completed/structural warmth
+val PlanAccent = Color(0xFFA8D5BA)            // Soft sage green for day organizer blocks
 
 // URGENCY - Warm amber/terracotta tones for due date urgency
 val UrgencyOverdue = Color(0xFFC97C52)          // Rich terracotta for overdue
@@ -55,6 +56,7 @@ val LightAmbientText = Color(0xFF1C1A17)
 val LightAccentPrimary = Color(0xFF00897B)    // Deeper teal for light bg contrast
 val LightAccentSubtle = Color(0xFFB2DFDB)
 val LightAccentWarm = Color(0xFFC06666)       // Soft rose for light mode (matches dark #CF8E8E intent)
+val LightPlanAccent = Color(0xFF66BB6A)       // Sage green for light mode
 
 // LIGHT MODE URGENCY - Richer saturation in daylight
 val LightUrgencyOverdue = Color(0xFFBF4E30)
