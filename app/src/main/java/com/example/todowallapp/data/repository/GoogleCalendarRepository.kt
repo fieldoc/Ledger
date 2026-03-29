@@ -191,6 +191,50 @@ class GoogleCalendarRepository(
         }
     }
 
+    suspend fun createEvent(
+        title: String,
+        startDateTime: LocalDateTime,
+        endDateTime: LocalDateTime,
+        calendarId: String = PRIMARY_CALENDAR_ID,
+        description: String? = null
+    ): Result<CalendarEvent> = withContext(Dispatchers.IO) {
+        if (!endDateTime.isAfter(startDateTime)) {
+            return@withContext Result.failure(
+                IllegalArgumentException("Event end time must be after start time")
+            )
+        }
+
+        withCalendarService { service ->
+            val zoneId = ZoneId.systemDefault()
+            val startInstant = startDateTime.atZone(zoneId).toInstant()
+            val endInstant = endDateTime.atZone(zoneId).toInstant()
+
+            val event = Event()
+                .setSummary(title)
+                .apply { if (description != null) setDescription(description) }
+                .setStart(
+                    EventDateTime()
+                        .setDateTime(DateTime(startInstant.toEpochMilli()))
+                        .setTimeZone(zoneId.id)
+                )
+                .setEnd(
+                    EventDateTime()
+                        .setDateTime(DateTime(endInstant.toEpochMilli()))
+                        .setTimeZone(zoneId.id)
+                )
+
+            val taskIdMatch = Regex("\\[todowallapp:task:(.+?)]").find(description ?: "")
+            if (taskIdMatch != null) {
+                event.extendedProperties = com.google.api.services.calendar.model.Event.ExtendedProperties()
+                    .setPrivate(mapOf("todowall_task_id" to taskIdMatch.groupValues[1]))
+            }
+
+            val created = service.events().insert(calendarId, event).execute()
+            created.toCalendarEvent(calendarId = calendarId, zoneId = zoneId)
+                ?: throw IllegalStateException("Calendar API returned an invalid event payload")
+        }
+    }
+
     suspend fun deleteEvent(
         calendarId: String,
         eventId: String
