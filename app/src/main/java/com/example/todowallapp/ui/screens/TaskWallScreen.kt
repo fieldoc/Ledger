@@ -158,6 +158,7 @@ import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -294,6 +295,7 @@ fun TaskWallScreen(
     val view = LocalView.current
     val colors = LocalWallColors.current
     val dims = rememberLayoutDimensions()
+    val today = remember { LocalDate.now() }
     var selectedFocusKey by remember { mutableStateOf<String?>(null) }
     var ambientTier by remember { mutableStateOf(AmbientTier.ACTIVE) }
     val isAmbientMode = ambientTier != AmbientTier.ACTIVE
@@ -1031,6 +1033,7 @@ fun TaskWallScreen(
                                 isAmbientMode = isAmbientMode,
                                 scheduledTaskIds = scheduledTaskIds,
                                 scheduledTaskTimes = scheduledTaskTimes,
+                                today = today,
                                 holdProgressFraction = if (selectedFolderId == model.taskList.id) holdProgressFraction else 0f,
                                 onHeaderClick = {
                                     wakeUp()
@@ -1368,6 +1371,7 @@ private fun FolderSection(
     isAmbientMode: Boolean,
     scheduledTaskIds: Set<String>,
     scheduledTaskTimes: Map<String, LocalDateTime>,
+    today: LocalDate,
     holdProgressFraction: Float = 0f,
     onHeaderClick: () -> Unit,
     onParentClick: (Task) -> Unit,
@@ -1505,7 +1509,7 @@ private fun FolderSection(
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     model.pendingGroups.forEach { group ->
-                        ParentChildGroup(group, folderId, selectedFocusKey, isAmbientMode, isExpanded, scheduledTaskIds, scheduledTaskTimes, holdProgressFraction, onParentClick, onTaskToggle, onTaskLongClick, onOpenScheduledTask)
+                        ParentChildGroup(group, folderId, selectedFocusKey, isAmbientMode, isExpanded, scheduledTaskIds, scheduledTaskTimes, today, holdProgressFraction, onParentClick, onTaskToggle, onTaskLongClick, onOpenScheduledTask)
                     }
 
                     // Completed section divider + completed tasks (Task 12)
@@ -1544,6 +1548,7 @@ private fun FolderSection(
                                 isSelected = selectedFocusKey == completedKey,
                                 isChild = false,
                                 isAmbientMode = isAmbientMode,
+                                today = today,
                                 onClick = { onTaskToggle(completedTask) },
                                 onLongClick = { onTaskLongClick(completedTask) }
                             )
@@ -1564,6 +1569,7 @@ private fun ParentChildGroup(
     isExpanded: Boolean,
     scheduledTaskIds: Set<String>,
     scheduledTaskTimes: Map<String, LocalDateTime>,
+    today: LocalDate,
     holdProgressFraction: Float,
     onParentClick: (Task) -> Unit,
     onTaskToggle: (Task) -> Unit,
@@ -1583,6 +1589,7 @@ private fun ParentChildGroup(
             scheduledStartTime = scheduledTaskTimes[group.parent.id],
             isExpanded = shouldShowChildren,
             holdProgressFraction = if (selectedFocusKey == parentKey) holdProgressFraction else 0f,
+            today = today,
             onClick = { onParentClick(group.parent) },
             onLongClick = { onTaskLongClick(group.parent) },
             onOpenScheduledSlot = {
@@ -1601,6 +1608,7 @@ private fun ParentChildGroup(
                     scheduledTaskIds = scheduledTaskIds,
                     scheduledStartTime = scheduledTaskTimes[child.id],
                     holdProgressFraction = if (selectedFocusKey == childKey) holdProgressFraction else 0f,
+                    today = today,
                     modifier = Modifier.padding(start = 32.dp),
                     onClick = { onTaskToggle(child) },
                     onLongClick = { onTaskLongClick(child) },

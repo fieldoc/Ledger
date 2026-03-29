@@ -152,9 +152,9 @@ internal fun TaskStatusIndicator(
 @Composable
 internal fun DueDateBadge(
     dueDate: LocalDate,
-    isAmbientMode: Boolean
+    isAmbientMode: Boolean,
+    today: LocalDate = LocalDate.now()
 ) {
-    val today = LocalDate.now()
     val daysUntilDue = ChronoUnit.DAYS.between(today, dueDate)
     val isOverdue = daysUntilDue < 0
 

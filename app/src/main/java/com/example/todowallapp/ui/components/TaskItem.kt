@@ -104,6 +104,7 @@ fun TaskItem(
     subtaskProgress: SubtaskProgress? = null,
     isExpanded: Boolean = false,
     holdProgressFraction: Float = 0f,
+    today: LocalDate = LocalDate.now(),
     onClick: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
     onScheduleTask: (() -> Unit)? = null,
@@ -126,6 +127,7 @@ fun TaskItem(
             subtaskProgress = subtaskProgress,
             isExpanded = isExpanded,
             holdProgressFraction = holdProgressFraction,
+            today = today,
             checkmarkAlpha = checkmarkAlpha,
             completionContentAlpha = completionContentAlpha,
             onClick = onClick,
@@ -149,6 +151,7 @@ private fun TaskItemContent(
     subtaskProgress: SubtaskProgress?,
     isExpanded: Boolean,
     holdProgressFraction: Float,
+    today: LocalDate,
     checkmarkAlpha: Float,
     completionContentAlpha: Float,
     onClick: () -> Unit,
@@ -156,7 +159,6 @@ private fun TaskItemContent(
     onScheduleTask: (() -> Unit)? = null,
     onOpenScheduledSlot: (() -> Unit)? = null
 ) {
-    val today = LocalDate.now()
     val accessibilityDescription = remember(
         task.id,
         task.title,
@@ -391,7 +393,8 @@ private fun TaskItemContent(
                         Spacer(modifier = Modifier.height(8.dp))
                         DueDateBadge(
                             dueDate = task.dueDate,
-                            isAmbientMode = isAmbientMode
+                            isAmbientMode = isAmbientMode,
+                            today = today
                         )
                     }
                 }
