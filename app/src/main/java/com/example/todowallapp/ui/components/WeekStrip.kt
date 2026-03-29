@@ -67,24 +67,32 @@ fun WeekStrip(
                     .weight(1f)
                     .background(containerColor, RoundedCornerShape(10.dp))
                     .clickable { onDateSelected(date) }
-                    .padding(horizontal = 6.dp, vertical = 6.dp),
+                    .padding(horizontal = 4.dp, vertical = 3.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(1.dp)
             ) {
                 Text(
                     text = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (isSelected) colors.accentPrimary else colors.textMuted
+                    color = when {
+                        isSelected -> colors.accentPrimary
+                        isToday -> colors.accentPrimary.copy(alpha = 0.6f)
+                        else -> colors.textMuted
+                    }
                 )
                 Text(
                     text = date.dayOfMonth.toString(),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isSelected) colors.accentPrimary else colors.textPrimary
+                    color = when {
+                        isSelected -> colors.accentPrimary
+                        isToday -> colors.accentPrimary.copy(alpha = 0.6f)
+                        else -> colors.textPrimary
+                    }
                 )
 
                 if (dayEvents.isEmpty()) {
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         dayEvents.take(3).forEach { event ->
@@ -101,17 +109,6 @@ fun WeekStrip(
                             )
                         }
                     }
-                }
-
-                if (isToday && !isSelected) {
-                    Box(
-                        modifier = Modifier
-                            .padding(top = 1.dp)
-                            .size(width = 12.dp, height = 2.dp)
-                            .background(colors.accentPrimary.copy(alpha = 0.6f), RoundedCornerShape(999.dp))
-                    )
-                } else {
-                    Spacer(modifier = Modifier.height(2.dp))
                 }
             }
         }

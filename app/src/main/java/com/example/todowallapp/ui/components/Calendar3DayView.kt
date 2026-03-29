@@ -9,7 +9,9 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -51,7 +52,6 @@ import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.data.model.occursOn
 import com.example.todowallapp.ui.theme.LocalWallColors
 import com.example.todowallapp.ui.theme.WallAnimations
-import com.example.todowallapp.ui.theme.WallShapes
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
 import kotlinx.coroutines.delay
 import java.time.LocalDate
@@ -305,52 +305,81 @@ fun Calendar3DayView(
             ) { slotIdx ->
                 val timeSlot = daySlots[0][slotIdx]
                 val slotTime = timeSlot.start
-                val slotHeight = dims.daySlotHeightEmpty
+                val isOnTheHour = slotTime.minute == 0
+                val anyHasEvents = daySlots.any { it[slotIdx].events.isNotEmpty() }
+                val isNowRow = days.any { date ->
+                    val slot = daySlots[days.indexOf(date)][slotIdx]
+                    date == now.toLocalDate() && now >= slot.start && now < slot.start.plusMinutes(30)
+                }
 
-                Row(
+                // Three-tier height: any-column events > hour marks > half-hour marks
+                val rowHeight = when {
+                    anyHasEvents -> dims.daySlotHeightWithEvents
+                    isOnTheHour -> dims.daySlotHeightEmptyHour
+                    else -> dims.daySlotHeightEmptyHalfHour
+                }
+
+                // Full-width "now" band wraps the entire row
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(slotHeight),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Shared time label
-                    Text(
-                        text = slotTime.format(ThreeDayTimeFormatter),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.textMuted,
-                        modifier = Modifier
-                            .width(dims.dayTimeColumnWidth)
-                            .padding(end = 4.dp)
-                    )
-
-                    // 3 day columns
-                    days.forEachIndexed { dayIdx, date ->
-                        val slot = daySlots[dayIdx][slotIdx]
-                        val hasEvents = slot.events.isNotEmpty()
-                        val isSelected = dayIdx == selectedDayOffset && slotIdx == selectedSlotIndex
-                        val slotStart = slot.start
-                        val slotEnd = slotStart.plusMinutes(30)
-                        val hasNow = date == now.toLocalDate() && now >= slotStart && now < slotEnd
-
-                        val slotInDragRange = dragDayColumn == dayIdx && dragRange?.let { range ->
-                            val slotEnd = slot.start.plusMinutes(30)
-                            slot.start < range.endTime && slotEnd > range.startTime
-                        } == true
-
-                        ThreeDaySlotCell(
-                            slot = slot,
-                            isSelected = isSelected,
-                            isInDragRange = slotInDragRange,
-                            hasNow = hasNow,
-                            selectedEventId = if (dayIdx == selectedDayOffset) selectedEventId else null,
-                            taskUrgencyByTaskId = taskUrgencyByTaskId,
-                            onSlotActivated = { onSlotActivated(date, slot.start) },
-                            onEventActivated = onEventActivated,
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .padding(horizontal = 1.dp)
+                        .then(
+                            if (isNowRow) Modifier.background(
+                                colors.accentPrimary.copy(alpha = 0.06f),
+                                RoundedCornerShape(6.dp)
+                            ) else Modifier
                         )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(rowHeight),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Time label: show on hour marks only (suppress half-hour noise)
+                        Text(
+                            text = if (isOnTheHour || anyHasEvents)
+                                slotTime.format(ThreeDayTimeFormatter)
+                            else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when {
+                                isNowRow -> colors.accentPrimary
+                                anyHasEvents || isOnTheHour -> colors.textSecondary
+                                else -> colors.textDisabled
+                            },
+                            modifier = Modifier
+                                .width(dims.dayTimeColumnWidth)
+                                .padding(end = 4.dp)
+                        )
+
+                        // 3 day columns
+                        days.forEachIndexed { dayIdx, date ->
+                            val slot = daySlots[dayIdx][slotIdx]
+                            val isSelected = dayIdx == selectedDayOffset && slotIdx == selectedSlotIndex
+                            val slotStart = slot.start
+                            val slotEnd = slotStart.plusMinutes(30)
+                            val hasNow = date == now.toLocalDate() && now >= slotStart && now < slotEnd
+
+                            val slotInDragRange = dragDayColumn == dayIdx && dragRange?.let { range ->
+                                slot.start < range.endTime && slotEnd > range.startTime
+                            } == true
+
+                            ThreeDaySlotCell(
+                                slot = slot,
+                                isOnTheHour = isOnTheHour,
+                                isSelected = isSelected,
+                                isInDragRange = slotInDragRange,
+                                hasNow = hasNow,
+                                selectedEventId = if (dayIdx == selectedDayOffset) selectedEventId else null,
+                                taskUrgencyByTaskId = taskUrgencyByTaskId,
+                                onSlotActivated = { onSlotActivated(date, slot.start) },
+                                onEventActivated = onEventActivated,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .padding(horizontal = 1.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -361,6 +390,7 @@ fun Calendar3DayView(
 @Composable
 private fun ThreeDaySlotCell(
     slot: CalendarTimeSlot,
+    isOnTheHour: Boolean,
     isSelected: Boolean,
     isInDragRange: Boolean = false,
     hasNow: Boolean,
@@ -374,98 +404,131 @@ private fun ThreeDaySlotCell(
     val hasEvents = slot.events.isNotEmpty()
     val isHighlighted = isSelected || isInDragRange
 
-    val bg by animateColorAsState(
-        targetValue = when {
-            isInDragRange -> colors.accentPrimary.copy(alpha = 0.18f)
-            isSelected -> colors.accentPrimary.copy(alpha = 0.12f)
-            hasEvents -> colors.surfaceCard
-            else -> Color.Transparent
-        },
-        animationSpec = tween(WallAnimations.SHORT),
-        label = "threeDaySlotBg"
+    // Hoisted out of conditional to satisfy Compose composition rules
+    val nowPulse by rememberInfiniteTransition(label = "nowPulse3d").animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "nowAlpha3d"
     )
 
-    val borderColor by animateColorAsState(
-        targetValue = when {
-            isHighlighted -> colors.accentPrimary
-            hasEvents -> colors.borderColor
-            else -> colors.borderColor.copy(alpha = 0.3f)
-        },
-        animationSpec = tween(WallAnimations.SHORT),
-        label = "threeDaySlotBorder"
-    )
+    val cellShape = RoundedCornerShape(4.dp)
 
     Box(
         modifier = modifier
-            .background(bg, RoundedCornerShape(6.dp))
-            .border(
-                width = if (isHighlighted) 1.5.dp else 0.5.dp,
-                color = borderColor,
-                shape = RoundedCornerShape(6.dp)
-            )
-            .pointerInput(Unit) {
-                detectTapGestures { onSlotActivated() }
-            }
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        contentAlignment = Alignment.CenterStart
+            .pointerInput(Unit) { detectTapGestures { onSlotActivated() } }
     ) {
+        // Hour-boundary hairline — visible only on empty on-the-hour cells to create rhythm
+        if (!hasEvents && isOnTheHour) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .align(Alignment.TopCenter)
+                    .background(colors.dividerColor.copy(alpha = 0.6f))
+            )
+        }
+
+        // Now indicator: pulsing accent line inside the current-day column
         if (hasNow && !hasEvents) {
-            val nowPulse by rememberInfiniteTransition(label = "nowPulse3d")
-                .animateFloat(
-                    initialValue = 0.35f,
-                    targetValue = 0.75f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(2000, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "nowAlpha3d"
-                )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.5.dp)
-                    .background(colors.accentPrimary.copy(alpha = nowPulse * 0.6f))
+                    .align(Alignment.Center)
+                    .background(colors.accentPrimary.copy(alpha = nowPulse * 0.55f))
             )
         }
 
+        // Selection / drag highlight on empty cells
+        if (isHighlighted && !hasEvents) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 1.dp, vertical = 2.dp)
+                    .background(
+                        if (isInDragRange) colors.accentPrimary.copy(alpha = 0.18f)
+                        else colors.accentPrimary.copy(alpha = 0.10f),
+                        cellShape
+                    )
+                    .border(1.dp, colors.accentPrimary.copy(alpha = 0.5f), cellShape)
+            )
+        }
+
+        // Event chip — left accent bar + title (compact for 3-column layout)
         if (hasEvents) {
             val event = slot.events.first()
             val isEventSelected = event.id == selectedEventId
             val urgency = event.sourceTaskId?.let(taskUrgencyByTaskId::get)
-            val dotColor = when (urgency) {
+            val accentColor = when (urgency) {
                 TaskUrgency.OVERDUE -> colors.urgencyOverdue
                 TaskUrgency.DUE_TODAY -> colors.urgencyDueToday
                 TaskUrgency.DUE_SOON -> colors.urgencyDueSoon
                 else -> colors.accentPrimary
             }
 
+            val chipBg by animateColorAsState(
+                targetValue = when {
+                    isInDragRange -> colors.accentPrimary.copy(alpha = 0.18f)
+                    isEventSelected -> colors.accentPrimary.copy(alpha = 0.20f)
+                    event.isPromotedTask -> accentColor.copy(alpha = 0.10f)
+                    else -> colors.surfaceCard
+                },
+                animationSpec = tween(WallAnimations.SHORT),
+                label = "threeDayChipBg"
+            )
+
+            val chipBorder by animateColorAsState(
+                targetValue = when {
+                    isHighlighted -> colors.accentPrimary
+                    event.isPromotedTask -> accentColor.copy(alpha = 0.45f)
+                    else -> colors.borderColor
+                },
+                animationSpec = tween(WallAnimations.SHORT),
+                label = "threeDayChipBorder"
+            )
+
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 1.dp, vertical = 2.dp)
+                    .clip(cellShape)
+                    .background(chipBg)
+                    .border(1.dp, chipBorder, cellShape)
+                    .clickable { onEventActivated(event) }
             ) {
-                if (event.isPromotedTask) {
-                    Box(
-                        modifier = Modifier
-                            .padding(end = 3.dp)
-                            .width(2.dp)
-                            .height(20.dp)
-                            .background(dotColor, RoundedCornerShape(1.dp))
-                    )
-                }
-                Text(
-                    text = event.title,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isEventSelected) colors.accentPrimary else colors.textPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                // Left accent bar — urgency-colored spine
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(2.dp)
+                        .background(accentColor)
                 )
-                if (slot.events.size > 1) {
+
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 4.dp)
+                        .fillMaxHeight(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "+${slot.events.size - 1}",
+                        text = event.title,
                         style = MaterialTheme.typography.labelSmall,
-                        color = colors.textMuted
+                        color = if (isEventSelected) colors.accentPrimary else colors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
+                    if (slot.events.size > 1) {
+                        Text(
+                            text = "+${slot.events.size - 1}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textMuted
+                        )
+                    }
                 }
             }
         }

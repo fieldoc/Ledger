@@ -17,6 +17,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,7 +25,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -44,8 +45,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.todowallapp.data.model.CalendarEvent
 import com.example.todowallapp.data.model.TaskUrgency
@@ -427,11 +428,17 @@ private fun CalendarSlotRow(
     val dims = rememberLayoutDimensions()
     val slotStart = slot.start
     val slotEnd = slotStart.plusMinutes(30)
-    val hasNow = now >= slotStart && now < slotEnd
+    val isNowSlot = now >= slotStart && now < slotEnd
     val hasEvents = slot.events.isNotEmpty()
+    val isOnTheHour = slotStart.minute == 0
+    val isHighlighted = isSelectedSlot || isInDragRange
 
-    val rowHeight = if (hasEvents) dims.daySlotHeightWithEvents else dims.daySlotHeightEmpty
-    val slotBoxHeight = if (hasEvents) dims.daySlotBoxHeightWithEvents else dims.daySlotBoxHeightEmpty
+    // Three-tier height: events > hour marks > half-hour marks
+    val rowHeight = when {
+        hasEvents -> dims.daySlotHeightWithEvents
+        isOnTheHour -> dims.daySlotHeightEmptyHour
+        else -> dims.daySlotHeightEmptyHalfHour
+    }
 
     val nowPulse by rememberInfiniteTransition(label = "nowPulse").animateFloat(
         initialValue = 0.35f,
@@ -443,85 +450,146 @@ private fun CalendarSlotRow(
         label = "nowPulseAlpha"
     )
 
-    Row(
+    // Full-width "now" band wraps the entire row
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(rowHeight),
-        verticalAlignment = Alignment.CenterVertically
+            .then(
+                if (isNowSlot) Modifier.background(
+                    colors.accentPrimary.copy(alpha = 0.06f),
+                    RoundedCornerShape(6.dp)
+                ) else Modifier
+            )
     ) {
-        Text(
-            text = slotStart.format(SlotTimeFormatter),
-            style = MaterialTheme.typography.labelMedium,
-            color = colors.textMuted,
+        Row(
             modifier = Modifier
-                .width(dims.dayTimeColumnWidth)
-                .padding(end = if (dims.isLandscape) 6.dp else 10.dp)
-        )
-
-        val isHighlighted = isSelectedSlot || isInDragRange
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(slotBoxHeight)
-                .background(
-                    when {
-                        isInDragRange -> colors.accentPrimary.copy(alpha = 0.18f)
-                        isSelectedSlot -> colors.accentPrimary.copy(alpha = 0.12f)
-                        else -> colors.surfaceCard
-                    },
-                    RoundedCornerShape(8.dp)
-                )
-                .border(
-                    width = if (isHighlighted) 1.5.dp else 1.dp,
-                    color = if (isHighlighted) colors.accentPrimary else colors.borderColor,
-                    shape = RoundedCornerShape(8.dp)
-                )
+                .fillMaxWidth()
+                .height(rowHeight)
                 .pointerInput(slot.start) {
                     detectTapGestures { onSlotActivated(slot.start) }
-                }
-                .padding(horizontal = 10.dp, vertical = if (hasEvents) 10.dp else 8.dp)
+                },
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            if (hasNow) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            // ── Time label: hour marks bold, half-hours muted ──
+            Text(
+                text = slotStart.format(SlotTimeFormatter),
+                style = if (isOnTheHour || hasEvents)
+                    MaterialTheme.typography.labelLarge
+                else
+                    MaterialTheme.typography.labelSmall,
+                color = when {
+                    isNowSlot -> colors.accentPrimary
+                    hasEvents || isOnTheHour -> colors.textSecondary
+                    else -> colors.textDisabled
+                },
+                modifier = Modifier
+                    .width(dims.dayTimeColumnWidth)
+                    .padding(end = if (dims.isLandscape) 6.dp else 10.dp)
+            )
+
+            // ── Slot content: tiered rendering ──
+            when {
+                // Tier 1: Event slot — full card with events
+                hasEvents -> {
                     Box(
                         modifier = Modifier
-                            .size(6.dp)
-                            .background(colors.accentPrimary.copy(alpha = nowPulse), CircleShape)
-                    )
-                    Box(
-                        modifier = Modifier
-                            .padding(start = 6.dp)
                             .weight(1f)
-                            .height(1.5.dp)
-                            .background(colors.accentPrimary.copy(alpha = 0.45f))
+                            .height(dims.daySlotBoxHeightWithEvents)
+                            .background(
+                                when {
+                                    isInDragRange -> colors.accentPrimary.copy(alpha = 0.18f)
+                                    isSelectedSlot -> colors.accentPrimary.copy(alpha = 0.12f)
+                                    else -> colors.surfaceCard
+                                },
+                                RoundedCornerShape(8.dp)
+                            )
+                            .border(
+                                width = if (isHighlighted) 1.5.dp else 1.dp,
+                                color = if (isHighlighted) colors.accentPrimary else colors.borderColor,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            slot.events.take(2).forEach { event ->
+                                Box(modifier = Modifier.weight(1f, fill = false)) {
+                                    EventChip(
+                                        event = event,
+                                        isSelected = event.id == selectedEventId,
+                                        sourceTaskListTitle = event.sourceTaskId?.let(taskListTitleByTaskId::get),
+                                        sourceTaskUrgency = event.sourceTaskId?.let(taskUrgencyByTaskId::get),
+                                        onActivated = { onEventActivated(event) }
+                                    )
+                                }
+                            }
+                            if (slot.events.size > 2) {
+                                Text(
+                                    text = "+${slot.events.size - 2}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.textMuted,
+                                    modifier = Modifier.align(Alignment.CenterVertically)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Selected/dragged empty slot — visible interactive state
+                isHighlighted -> {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(if (isOnTheHour) 32.dp else 20.dp)
+                            .background(
+                                if (isInDragRange) colors.accentPrimary.copy(alpha = 0.15f)
+                                else colors.accentPrimary.copy(alpha = 0.10f),
+                                RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                1.dp,
+                                colors.accentPrimary.copy(alpha = 0.5f),
+                                RoundedCornerShape(6.dp)
+                            )
                     )
                 }
-            }
 
-            if (hasEvents) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    slot.events.take(2).forEach { event ->
-                        EventChip(
-                            event = event,
-                            isSelected = event.id == selectedEventId,
-                            sourceTaskListTitle = event.sourceTaskId?.let(taskListTitleByTaskId::get),
-                            sourceTaskUrgency = event.sourceTaskId?.let(taskUrgencyByTaskId::get),
-                            onActivated = { onEventActivated(event) }
+                // Now slot (empty) — pulsing dot + accent line
+                isNowSlot -> {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(colors.accentPrimary.copy(alpha = nowPulse), CircleShape)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .padding(start = 6.dp)
+                                .weight(1f)
+                                .height(1.5.dp)
+                                .background(colors.accentPrimary.copy(alpha = 0.45f))
                         )
                     }
-                    if (slot.events.size > 2) {
-                        Text(
-                            text = "+${slot.events.size - 2} more",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.textMuted,
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        )
-                    }
+                }
+
+                // Tier 2: Empty hour mark — faint divider line
+                isOnTheHour -> {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(1.dp)
+                            .background(colors.dividerColor)
+                    )
+                }
+
+                // Tier 3: Empty half-hour — no visual element
+                else -> {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -535,28 +603,39 @@ private fun CompressedSlotRow(
     onToggleExpanded: () -> Unit
 ) {
     val colors = LocalWallColors.current
-
     val dims = rememberLayoutDimensions()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(dims.dayCompressedSlotHeight)
-            .background(colors.surfaceCard, RoundedCornerShape(8.dp))
-            .border(1.dp, colors.borderColor, RoundedCornerShape(8.dp))
             .clickable(onClick = onToggleExpanded)
-            .padding(horizontal = 10.dp, vertical = if (dims.isLandscape) 4.dp else 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = "${range.startTime.format(SlotTimeFormatter)} - ${range.endTime.format(SlotTimeFormatter)}",
-            style = MaterialTheme.typography.labelMedium,
-            color = colors.textMuted
+        // Left faint line
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(colors.dividerColor.copy(alpha = 0.5f))
         )
+        // Centered label
         Text(
-            text = if (isExpanded) "Hide ${range.slotCount} empty slots" else "${range.slotCount} empty slots",
+            text = if (isExpanded)
+                "Hide ${range.slotCount} slots"
+            else
+                "${range.slotCount} empty \u00b7 ${range.startTime.format(SlotTimeFormatter)}\u2013${range.endTime.format(SlotTimeFormatter)}",
             style = MaterialTheme.typography.labelSmall,
-            color = colors.textMuted.copy(alpha = 0.7f)
+            color = colors.textDisabled,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+        // Right faint line
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(colors.dividerColor.copy(alpha = 0.5f))
         )
     }
 }
@@ -570,64 +649,79 @@ private fun EventChip(
     onActivated: () -> Unit
 ) {
     val colors = LocalWallColors.current
-    val dims = rememberLayoutDimensions()
-    val urgencyColor = when (sourceTaskUrgency) {
+    val accentColor = when (sourceTaskUrgency) {
         TaskUrgency.OVERDUE -> colors.urgencyOverdue
         TaskUrgency.DUE_TODAY -> colors.urgencyDueToday
         TaskUrgency.DUE_SOON -> colors.urgencyDueSoon
-        TaskUrgency.NORMAL -> colors.accentPrimary
         else -> colors.accentPrimary
     }
 
     val bg by animateColorAsState(
         targetValue = when {
             isSelected -> colors.accentPrimary.copy(alpha = 0.2f)
-            event.isPromotedTask -> urgencyColor.copy(alpha = 0.14f)
+            event.isPromotedTask -> accentColor.copy(alpha = 0.10f)
             else -> colors.surfaceElevated
         },
         animationSpec = tween(WallAnimations.SHORT),
         label = "calendarEventBg"
     )
 
-    val border by animateColorAsState(
+    val borderCol by animateColorAsState(
         targetValue = when {
             isSelected -> colors.accentPrimary
-            event.isPromotedTask -> urgencyColor.copy(alpha = 0.7f)
+            event.isPromotedTask -> accentColor.copy(alpha = 0.5f)
             else -> colors.borderColor
         },
         animationSpec = tween(WallAnimations.SHORT),
         label = "calendarEventBorder"
     )
 
+    val timeRange = remember(event) {
+        val start = event.startDateTime
+        val end = event.endDateTime
+        if (start != null && end != null) {
+            "${start.format(SlotTimeFormatter)}\u2009\u2013\u2009${end.format(SlotTimeFormatter)}"
+        } else null
+    }
+
+    val chipShape = RoundedCornerShape(6.dp)
     Row(
         modifier = Modifier
-            .background(bg, RoundedCornerShape(WallShapes.SmallCornerRadius.dp))
-            .border(1.dp, border, RoundedCornerShape(WallShapes.SmallCornerRadius.dp))
+            .clip(chipShape)
+            .background(bg)
+            .border(1.dp, borderCol, chipShape)
             .clickable(onClick = onActivated)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .height(IntrinsicSize.Min)
     ) {
-        if (event.isPromotedTask) {
-            Box(
-                modifier = Modifier
-                    .size(4.dp)
-                    .background(urgencyColor, CircleShape)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
-        }
-
-        Text(
-            text = if (!sourceTaskListTitle.isNullOrBlank()) {
-                "$sourceTaskListTitle - ${event.title}"
-            } else {
-                event.title
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.textPrimary,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = if (dims.dayEventChipMaxWidth != Dp.Unspecified)
-                Modifier.widthIn(max = dims.dayEventChipMaxWidth) else Modifier
+        // Left accent bar — urgency-colored spine
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(3.dp)
+                .background(accentColor)
         )
+
+        Column(
+            modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 5.dp, bottom = 5.dp)
+        ) {
+            Text(
+                text = if (!sourceTaskListTitle.isNullOrBlank()) {
+                    "$sourceTaskListTitle \u2013 ${event.title}"
+                } else {
+                    event.title
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (timeRange != null) {
+                Text(
+                    text = timeRange,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textMuted
+                )
+            }
+        }
     }
 }

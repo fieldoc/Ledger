@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -647,7 +649,12 @@ fun CalendarScreen(
                     else -> false
                 }
             }
-            .padding(top = dims.topPadding, start = dims.horizontalPadding, end = dims.horizontalPadding, bottom = 12.dp),
+            .padding(
+                top = dims.topPadding,
+                start = if (calendarViewMode == CalendarViewMode.DAY) dims.dayHorizontalPadding else dims.horizontalPadding,
+                end = if (calendarViewMode == CalendarViewMode.DAY) dims.dayHorizontalPadding else dims.horizontalPadding,
+                bottom = 12.dp
+            ),
         verticalArrangement = Arrangement.spacedBy(dims.calendarElementSpacing)
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -723,6 +730,13 @@ fun CalendarScreen(
                 eventsByDate = eventsByDate,
                 taskUrgencyByTaskId = taskUrgencyByTaskId,
                 onDateSelected = onSelectDate
+            )
+            // Visual break between chrome and timeline content
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(LocalWallColors.current.dividerColor)
             )
         }
 
