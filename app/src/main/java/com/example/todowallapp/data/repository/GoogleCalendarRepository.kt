@@ -31,6 +31,7 @@ class GoogleCalendarRepository(
     companion object {
         const val PRIMARY_CALENDAR_ID = "primary"
         private const val TASK_TAG_REGEX = "\\[todowallapp:task:([^\\]]+)]"
+        private val TASK_TAG_PATTERN = Regex(TASK_TAG_REGEX)
     }
 
     private var calendarService: Calendar? = null
@@ -112,19 +113,30 @@ class GoogleCalendarRepository(
                 ?: emptyList()
 
             // Build map: each date in range → events that occur on that date
-            val dateRange = generateSequence(startDate) { d ->
-                d.plusDays(1).takeIf { !it.isAfter(endDateInclusive) }
-            }.toList()
-
-            dateRange.associateWith { date ->
-                allEvents
-                    .filter { event -> event.occursOn(date) }
-                    .sortedWith(
-                        compareBy<CalendarEvent> { it.isAllDay.not() }
-                            .thenBy { it.startDateTime ?: it.allDayStartDate?.atStartOfDay() ?: LocalDateTime.MIN }
-                            .thenBy { it.title.lowercase() }
-                    )
+            // Pre-build the map with empty lists for every date in range
+            val grouped = linkedMapOf<LocalDate, MutableList<CalendarEvent>>()
+            var cursor = startDate
+            while (!cursor.isAfter(endDateInclusive)) {
+                grouped[cursor] = mutableListOf()
+                cursor = cursor.plusDays(1)
             }
+
+            // Single comparator instance for all days
+            val eventComparator = compareBy<CalendarEvent> { it.isAllDay.not() }
+                .thenBy { it.startDateTime ?: it.allDayStartDate?.atStartOfDay() ?: LocalDateTime.MIN }
+                .thenBy { it.title.lowercase() }
+
+            // Add each event to every date it occurs on
+            for (event in allEvents) {
+                for ((date, list) in grouped) {
+                    if (event.occursOn(date)) {
+                        list.add(event)
+                    }
+                }
+            }
+
+            // Sort each day's events
+            grouped.mapValues { (_, events) -> events.sortedWith(eventComparator) }
         }
     }
 
@@ -220,7 +232,7 @@ class GoogleCalendarRepository(
             ?.private
             ?.get("todowall_task_id")
             ?.takeIf { it.isNotBlank() }
-        val taskIdFromDescription = Regex(TASK_TAG_REGEX)
+        val taskIdFromDescription = TASK_TAG_PATTERN
             .find(description.orEmpty())
             ?.groupValues
             ?.getOrNull(1)
