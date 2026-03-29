@@ -1057,6 +1057,10 @@ class TaskWallViewModel(
         startDayOrganizer()
     }
 
+    fun setDayOrganizerFocus(index: Int) {
+        dayOrganizerCoordinator.setFocusedAction(index)
+    }
+
     private fun restoreVoicePipelineCallback() {
         voiceParsingCoordinator.configure(
             scope = viewModelScope,
