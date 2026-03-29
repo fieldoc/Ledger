@@ -33,7 +33,6 @@ private val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
 @Composable
 fun DayOrganizerOverlay(
     state: DayOrganizerState,
-    amplitudeLevel: Float,
     onStopListening: () -> Unit,
     onAccept: () -> Unit,
     onAdjust: () -> Unit,
