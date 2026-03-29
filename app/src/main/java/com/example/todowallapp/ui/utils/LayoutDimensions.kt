@@ -46,6 +46,12 @@ data class LayoutDimensions(
     val dayCompressedSlotHeight: Dp,
     /** Max width for event chip text (Dp.Unspecified = no limit) */
     val dayEventChipMaxWidth: Dp,
+    /** Horizontal padding for DAY mode (tighter than general to give timeline more room) */
+    val dayHorizontalPadding: Dp,
+    /** Height of empty on-the-hour slot rows (section dividers) */
+    val daySlotHeightEmptyHour: Dp,
+    /** Height of empty half-hour slot rows (minimal gridlines) */
+    val daySlotHeightEmptyHalfHour: Dp,
 
     // ── Calendar Month View ──
     /** Aspect ratio for day cells (1f = square) */
@@ -81,8 +87,11 @@ val PortraitDimensions = LayoutDimensions(
     daySlotBoxHeightWithEvents = 76.dp,
     daySlotBoxHeightEmpty = 48.dp,
     dayTimeColumnWidth = 66.dp,
-    dayCompressedSlotHeight = 36.dp,
+    dayCompressedSlotHeight = 28.dp,
     dayEventChipMaxWidth = 180.dp,
+    dayHorizontalPadding = 24.dp,
+    daySlotHeightEmptyHour = 44.dp,
+    daySlotHeightEmptyHalfHour = 28.dp,
     // Calendar Month
     monthCellAspectRatio = 1f,
     monthWeekRowSpacing = 4.dp,
@@ -109,8 +118,11 @@ val LandscapeDimensions = LayoutDimensions(
     daySlotBoxHeightWithEvents = 60.dp,
     daySlotBoxHeightEmpty = 38.dp,
     dayTimeColumnWidth = 54.dp,
-    dayCompressedSlotHeight = 30.dp,
+    dayCompressedSlotHeight = 22.dp,
     dayEventChipMaxWidth = Dp.Unspecified,
+    dayHorizontalPadding = 20.dp,
+    daySlotHeightEmptyHour = 36.dp,
+    daySlotHeightEmptyHalfHour = 22.dp,
     // Calendar Month — wider cells for landscape aspect ratio
     monthCellAspectRatio = 1.4f,
     monthWeekRowSpacing = 2.dp,
