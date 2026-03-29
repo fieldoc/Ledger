@@ -3,6 +3,9 @@ package com.example.todowallapp.ui.components
 import com.example.todowallapp.ui.theme.LocalWallColors
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,7 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,7 +45,9 @@ fun TaskPickerOverlay(
     visible: Boolean,
     tasksByList: List<Pair<String, List<Task>>>,
     focusedIndex: Int,
+    expandedListIndex: Int,
     onFocusIndex: (Int) -> Unit,
+    onExpandList: (Int) -> Unit,
     onSelectTask: (Task) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
@@ -50,18 +57,16 @@ fun TaskPickerOverlay(
     val shape = RoundedCornerShape(WallShapes.CardCornerRadius.dp)
     val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.6f).dp
 
-    // Build flat list of items with group headers interleaved
+    // Build accordion flat list: all headers visible, only expanded list's tasks shown
+    val nonEmptyLists = tasksByList.filter { it.second.isNotEmpty() }
     val flatItems = buildList {
-        tasksByList.forEach { (listName, tasks) ->
-            if (tasks.isNotEmpty()) {
-                add(PickerItem.Header(listName))
+        nonEmptyLists.forEachIndexed { listIndex, (listName, tasks) ->
+            add(PickerItem.ListHeader(listName, listIndex, tasks.size))
+            if (listIndex == expandedListIndex) {
                 tasks.forEach { add(PickerItem.TaskRow(it)) }
             }
         }
     }
-
-    // Map focusedIndex to only TaskRow items
-    val taskRowIndices = flatItems.indices.filter { flatItems[it] is PickerItem.TaskRow }
 
     Box(
         modifier = Modifier
@@ -105,24 +110,25 @@ fun TaskPickerOverlay(
                     .weight(1f, fill = false),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                itemsIndexed(flatItems) { flatIndex, item ->
+                itemsIndexed(flatItems) { index, item ->
                     when (item) {
-                        is PickerItem.Header -> {
-                            Text(
-                                text = item.listName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = LocalWallColors.current.textMuted,
-                                modifier = Modifier.padding(top = 10.dp, bottom = 4.dp, start = 4.dp)
+                        is PickerItem.ListHeader -> {
+                            val isFocused = index == focusedIndex
+                            PickerListHeader(
+                                listName = item.listName,
+                                taskCount = item.taskCount,
+                                isExpanded = item.listIndex == expandedListIndex,
+                                isFocused = isFocused,
+                                onClick = { onExpandList(item.listIndex) }
                             )
                         }
                         is PickerItem.TaskRow -> {
-                            val taskIndex = taskRowIndices.indexOf(flatIndex)
-                            val isFocused = taskIndex == focusedIndex
+                            val isFocused = index == focusedIndex
                             TaskPickerRow(
                                 task = item.task,
                                 isFocused = isFocused,
                                 onClick = {
-                                    onFocusIndex(taskIndex)
+                                    onFocusIndex(index)
                                     onSelectTask(item.task)
                                 }
                             )
@@ -142,10 +148,144 @@ fun TaskPickerOverlay(
 }
 
 /**
- * Returns the total number of selectable task rows in the picker.
+ * Returns the total number of focusable items in the accordion picker.
+ * Includes list headers + tasks in the currently expanded list only.
  */
-fun taskPickerRowCount(tasksByList: List<Pair<String, List<Task>>>): Int {
-    return tasksByList.sumOf { it.second.size }
+fun taskPickerFocusableCount(tasksByList: List<Pair<String, List<Task>>>, expandedListIndex: Int): Int {
+    val nonEmptyLists = tasksByList.filter { it.second.isNotEmpty() }
+    val headerCount = nonEmptyLists.size
+    val expandedTaskCount = nonEmptyLists.getOrNull(expandedListIndex)?.second?.size ?: 0
+    return headerCount + expandedTaskCount
+}
+
+/**
+ * Resolves whether the focused index points to a task row.
+ * Returns the Task if so, null if it's a list header.
+ */
+fun taskPickerResolveTask(
+    tasksByList: List<Pair<String, List<Task>>>,
+    expandedListIndex: Int,
+    focusedIndex: Int
+): Task? {
+    var idx = 0
+    val nonEmptyLists = tasksByList.filter { it.second.isNotEmpty() }
+    for ((listIdx, pair) in nonEmptyLists.withIndex()) {
+        if (idx == focusedIndex) return null // header
+        idx++
+        if (listIdx == expandedListIndex) {
+            for (task in pair.second) {
+                if (idx == focusedIndex) return task
+                idx++
+            }
+        }
+    }
+    return null
+}
+
+/**
+ * Resolves the list index if the focused index points to a header.
+ * Returns -1 if it's a task row, not a header.
+ */
+fun taskPickerResolveHeaderListIndex(
+    tasksByList: List<Pair<String, List<Task>>>,
+    expandedListIndex: Int,
+    focusedIndex: Int
+): Int {
+    var idx = 0
+    val nonEmptyLists = tasksByList.filter { it.second.isNotEmpty() }
+    for ((listIdx, _) in nonEmptyLists.withIndex()) {
+        if (idx == focusedIndex) return listIdx
+        idx++
+        if (listIdx == expandedListIndex) {
+            idx += nonEmptyLists[listIdx].second.size
+        }
+    }
+    return -1
+}
+
+/**
+ * Computes the focus index for the header of the given list.
+ */
+fun taskPickerHeaderFocusIndex(
+    tasksByList: List<Pair<String, List<Task>>>,
+    expandedListIndex: Int,
+    targetListIndex: Int
+): Int {
+    var idx = 0
+    val nonEmptyLists = tasksByList.filter { it.second.isNotEmpty() }
+    for ((listIdx, _) in nonEmptyLists.withIndex()) {
+        if (listIdx == targetListIndex) return idx
+        idx++ // header
+        if (listIdx == expandedListIndex) {
+            idx += nonEmptyLists[listIdx].second.size
+        }
+    }
+    return idx
+}
+
+@Composable
+private fun PickerListHeader(
+    listName: String,
+    taskCount: Int,
+    isExpanded: Boolean,
+    isFocused: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = LocalWallColors.current
+    val bg by animateColorAsState(
+        targetValue = if (isFocused) colors.accentPrimary.copy(alpha = 0.12f) else Color.Transparent,
+        animationSpec = tween(WallAnimations.SHORT),
+        label = "headerBg"
+    )
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 0f else -90f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "chevron"
+    )
+    val headerShape = RoundedCornerShape(WallShapes.MediumCornerRadius.dp)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bg, headerShape)
+            .then(
+                if (isFocused) Modifier.border(
+                    1.dp,
+                    colors.accentPrimary.copy(alpha = 0.3f),
+                    headerShape
+                ) else Modifier
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "\u25BE", // ▾ triangle
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textMuted,
+                modifier = Modifier.graphicsLayer { rotationZ = chevronRotation }
+            )
+            Text(
+                text = listName,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (isFocused) colors.textPrimary else colors.textSecondary
+            )
+        }
+        Text(
+            text = "$taskCount task${if (taskCount != 1) "s" else ""}",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.textMuted,
+            modifier = Modifier.alpha(0.7f)
+        )
+    }
 }
 
 @Composable
@@ -165,6 +305,7 @@ private fun TaskPickerRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(start = 24.dp) // indented under the list header
             .background(bg, RoundedCornerShape(WallShapes.MediumCornerRadius.dp))
             .border(borderWidth, borderColor, RoundedCornerShape(WallShapes.MediumCornerRadius.dp))
             .clickable(onClick = onClick)
@@ -184,7 +325,7 @@ private fun TaskPickerRow(
             Text(
                 text = task.dueDate.format(DueDateFormatter),
                 style = MaterialTheme.typography.labelSmall,
-                color = LocalWallColors.current.textMuted,
+                color = LocalWallColors.current.accentWarm,
                 modifier = Modifier.padding(start = 12.dp)
             )
         }
@@ -192,6 +333,6 @@ private fun TaskPickerRow(
 }
 
 private sealed class PickerItem {
-    data class Header(val listName: String) : PickerItem()
+    data class ListHeader(val listName: String, val listIndex: Int, val taskCount: Int) : PickerItem()
     data class TaskRow(val task: Task) : PickerItem()
 }
