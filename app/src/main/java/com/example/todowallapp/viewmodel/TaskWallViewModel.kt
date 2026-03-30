@@ -27,6 +27,7 @@ import com.example.todowallapp.data.model.PromotionDraft
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskList
 import com.example.todowallapp.data.model.TaskListWithTasks
+import com.example.todowallapp.data.model.TaskMetadata
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.data.repository.GoogleCalendarRepository
@@ -616,6 +617,9 @@ class TaskWallViewModel(
             result.onSuccess { serverTask ->
                 inFlightTaskIds.remove(task.id)
                 updateTaskAcrossLists(task.id) { serverTask }
+                if (task.recurrenceRule != null) {
+                    spawnNextRecurrence(task, taskListId)
+                }
             }
             result.onFailure { error ->
                 inFlightTaskIds.remove(task.id)
@@ -631,6 +635,28 @@ class TaskWallViewModel(
                 _uiState.update { it.copy(error = "Failed to complete task: ${error.message}") }
             }
         }
+    }
+
+    /**
+     * Spawn a fresh recurring task instance after the previous one is completed.
+     * Uses LocalDate.now() as the 'from' date so the next due date rolls forward
+     * from today regardless of when the task was originally due.
+     */
+    private suspend fun spawnNextRecurrence(completedTask: Task, taskListId: String) {
+        val rule = completedTask.recurrenceRule ?: return
+        val nextDue = rule.nextDueDate(LocalDate.now())
+        val encodedNotes = TaskMetadata.encode(completedTask.cleanNotes, rule, completedTask.priority)
+        tasksRepository.createTask(
+            taskListId = taskListId,
+            title = completedTask.title,
+            dueDate = nextDue,
+            parentId = completedTask.parentId,
+            notes = encodedNotes
+        ).onFailure { error ->
+            Log.w("TaskWallVM", "Failed to spawn recurrence for '${completedTask.title}': ${error.message}")
+            _uiState.update { it.copy(error = "Recurring task created but next instance failed: ${error.message}") }
+        }
+        performRefresh(showSyncIndicator = false)
     }
 
     /**
@@ -772,11 +798,13 @@ class TaskWallViewModel(
                             ?: defaultListId
                             ?: continue
 
+                        val encodedNotes = TaskMetadata.encode(null, task.recurrenceRule, task.priority)
                         val result = tasksRepository.createTask(
                             taskListId = listId,
                             title = task.title,
                             dueDate = task.dueDate,
-                            parentId = task.parentTaskId
+                            parentId = task.parentTaskId,
+                            notes = encodedNotes.ifEmpty { null }
                         )
                         if (result.isFailure) anyFailed = true
                     }
