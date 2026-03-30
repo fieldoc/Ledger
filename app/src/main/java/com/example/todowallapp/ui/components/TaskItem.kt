@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -58,6 +59,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.example.todowallapp.data.model.MockData
 import com.example.todowallapp.data.model.Task
+import com.example.todowallapp.data.model.TaskPriority
 import com.example.todowallapp.data.model.TaskUrgency
 import com.example.todowallapp.ui.screens.SubtaskProgress
 import com.example.todowallapp.ui.theme.LedgerTheme
@@ -89,7 +91,7 @@ private fun Task.accessibilityDescription(today: LocalDate = LocalDate.now()): S
         }
     }
 
-    val notesDescription = notes?.takeIf { it.isNotBlank() }?.let { ", Note: $it" }.orEmpty()
+    val notesDescription = cleanNotes?.takeIf { it.isNotBlank() }?.let { ", Note: $it" }.orEmpty()
     return "$status task. $title. $dueDescription$notesDescription"
 }
 
@@ -318,6 +320,19 @@ private fun TaskItemContent(
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp, vertical = 18.dp)
             ) {
+                // Priority pip — left of checkbox for HIGH priority tasks
+                if (task.priority == TaskPriority.HIGH && !task.isCompleted && !isAmbientMode) {
+                    Box(
+                        modifier = Modifier
+                            .size(5.dp)
+                            .background(
+                                color = colors.accentPrimary.copy(alpha = 0.7f),
+                                shape = CircleShape
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+
                 TaskStatusIndicator(
                     isCompleted = task.isCompleted,
                     isAmbientMode = isAmbientMode,
@@ -344,6 +359,16 @@ private fun TaskItemContent(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
+
+                        // Recurrence glyph — shown when task has a recurrence rule
+                        if (task.recurrenceRule != null && !task.isCompleted && !isAmbientMode) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "\u21BB",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = LocalWallColors.current.textSecondary.copy(alpha = 0.4f)
+                            )
+                        }
 
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -378,10 +403,10 @@ private fun TaskItemContent(
                         }
                     }
 
-                    if (!task.notes.isNullOrBlank() && !task.isCompleted) {
+                    if (!task.cleanNotes.isNullOrBlank() && !task.isCompleted) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = task.notes,
+                            text = task.cleanNotes,
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (isAmbientMode) LocalWallColors.current.ambientText.copy(alpha = 0.82f) else LocalWallColors.current.textSecondary.copy(alpha = 0.94f),
                             maxLines = 1,
