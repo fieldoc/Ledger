@@ -152,9 +152,11 @@ Performance note: `TaskMetadata.decode()` is called once per task during `toAppT
 
 ### 5.2 Extended `Task` model
 
+The existing `Task` data class already has a `notes: String?` field that holds the raw Google Tasks notes value as returned by the API. This field is unchanged — it continues to store raw notes including any `||...||` tags. Three new fields are added:
+
 ```kotlin
 data class Task(
-    // ... existing fields ...
+    // ... existing fields including notes: String? (raw, unchanged) ...
     val recurrenceRule: RecurrenceRule? = null,
     val priority: TaskPriority = TaskPriority.NORMAL,
     val cleanNotes: String? = null   // notes with metadata tags stripped; use this for ALL display
@@ -188,9 +190,9 @@ data class ParsedVoiceTaskItem(
 | Frequency | Anchor | Calculation |
 |---|---|---|
 | DAILY | — | `from + interval days` |
-| WEEKLY | day-of-week | Find the next occurrence of that day strictly after `from`; then add `(interval - 1) * 7` days. Intentionally snaps to a fixed weekday cadence. **Example (interval=2, anchor=MONDAY):** completing on Sunday March 29 → next Monday March 30, then +7 = April 6. |
+| WEEKLY | day-of-week | `candidate = from + interval * 7`; then advance `candidate` forward day-by-day until it lands on `anchor` day-of-week. **Example (interval=2, anchor=MONDAY):** from=Sunday March 29 → candidate = March 29+14 = Sunday April 12 → advance to next Monday = **April 13**. For interval=1, anchor=MONDAY: from=Sunday March 29 → candidate = April 5 (Sunday) → advance to April 6 (Monday). |
 | WEEKLY | none | `from + interval * 7 days`. Pure rolling interval — does not snap to a weekday. **Note:** Unanchored weekly/monthly tasks use rolling intervals from the completion date, not a fixed calendar cadence. Over time, a "complete late" pattern will cause the schedule to drift. This is accepted behavior — see Section 13. |
-| MONTHLY | day number | Day `anchor.toInt()` of the month that is `interval` months after `from.month`. Clamp to last day of that month if the anchor day exceeds it. The anchor value is preserved in the tag for future calculations; clamping is per-occurrence only. |
+| MONTHLY | day number | Day `anchor.toInt()` of the month that is `interval` months after `from.month`. Clamp to last day of that month if needed. `nextDueDate()` is pure — it never modifies `RecurrenceRule.anchor`; clamping applies only to the returned `LocalDate`. The original anchor is preserved in the tag for all future spawns. |
 | MONTHLY | none | `from + interval * 30 days` (approximation). Subject to the same rolling-interval drift as unanchored WEEKLY. |
 
 ### 6.1 First-occurrence date for recurring tasks with no spoken due date
@@ -265,11 +267,13 @@ Strong urgency signals → `priority: "high"`:
 
 **JSON-to-Kotlin deserialization rules** (implemented in `parseVoiceResponseJson()`):
 - `recurrence` absent or JSON null → `ParsedVoiceTaskItem.recurrenceRule = null`
-- `recurrence.frequency` string → `RecurrenceFrequency.valueOf(str.uppercase())`, default `WEEKLY` on parse failure
+- `recurrence.frequency` string → `RecurrenceFrequency.valueOf(str.uppercase())`; on unrecognized value (e.g. `"biweekly"`, `"yearly"`), discard the entire recurrence block → `recurrenceRule = null` (do NOT default to WEEKLY)
 - `recurrence.interval` → Int, default `1` on parse failure
 - `recurrence.anchor` null or absent → `RecurrenceRule.anchor = null`; non-null string → passed as-is
 - `priority` string → `TaskPriority.valueOf(str.uppercase())`, default `TaskPriority.NORMAL` on any failure or absence
 - Any exception during recurrence block parsing → `recurrenceRule = null` (whole block silently dropped)
+- Anchor string validation: anchor values are passed through as-is from the tag or JSON. Out-of-range values (e.g. `"32"`, `"FUNDAY"`) are stored on `RecurrenceRule.anchor` unchanged; `nextDueDate()` must handle invalid anchor strings gracefully by falling back to the no-anchor path for that frequency.
+- Insert Sections 9 and 10 immediately before the existing JSON schema block in `buildVoicePromptV2()`.
 
 ---
 
@@ -291,11 +295,13 @@ suspend fun createTask(
 
 ## 9. ViewModel: Recurring Task Spawning
 
-After a successful `completeTask(taskListId, taskId)` call, the ViewModel checks `task.recurrenceRule`:
+After a successful `completeTask(taskListId, taskId)` call, the ViewModel checks `task.recurrenceRule`.
+
+**`from` date for spawn:** Always use `LocalDate.now()` at the moment `completeTask()` returns — i.e., the actual completion date. Do NOT use `task.dueDate` as `from`. Using the original due date would cause a task completed two weeks late to spawn immediately overdue (the next anchor after an old date may already be in the past). Using today ensures the next instance is always in the future relative to when the user actually completed it.
 
 ```
 if task.recurrenceRule != null:
-    nextDue = task.recurrenceRule.nextDueDate(from = task.dueDate ?: LocalDate.now())
+    nextDue = task.recurrenceRule.nextDueDate(from = LocalDate.now())
     encodedNotes = TaskMetadata.encode(task.cleanNotes, task.recurrenceRule, task.priority)
     result = tasksRepository.createTask(
         taskListId = taskListId,   // same list the completed task belonged to — NOT currentListId
@@ -312,7 +318,7 @@ if task.recurrenceRule != null:
         refresh task list
 ```
 
-**Offline behavior:** If `createTask()` fails due to network unavailability, the completed task remains completed and the recurrence spawn is silently lost. The existing sync error indicator in `ClockHeader` is surfaced. This is an accepted limitation — offline recurrence spawning is out of scope (see Section 13). The `ConnectivityMonitor` state is checked pre-flight; if offline, the spawn is skipped and the error is emitted immediately without an API call.
+**Offline behavior:** The `ConnectivityMonitor` pre-flight check is a best-effort early exit — if offline is detected before the call, skip the `createTask()` call and emit the error immediately. This is not a guarantee: the device may go offline between the pre-flight check and the API call. The `result.isFailure` branch is the authoritative error handler for both offline and transient API failures in all cases. If `createTask()` fails for any reason, the existing sync error indicator in `ClockHeader` is surfaced. The completed task remains completed. Offline recurrence spawning / local retry queuing is out of scope (see Section 13).
 
 The completed task stays completed (drifts to bottom as normal). The new instance appears at the appropriate sorted position after list refresh.
 
@@ -342,9 +348,11 @@ A small `↻` character (Unicode U+21BB) rendered as `labelSmall` text after the
 
 ### 11.3 Draft card preview
 
-The voice confirmation draft card shows:
+The draft card reads `recurrenceRule` and `priority` from the `ParsedVoiceTaskItem` held in `VoiceInputState.Preview`.
+
+The draft card shows:
 - Priority pip (same 5dp circle, same color) if `priority == HIGH`
-- `↻ <recurrenceRule.toHumanReadable()>` badge (e.g. `↻ Every Sunday`) if `recurrenceRule != null`, rendered as `labelSmall` in muted accent color
+- `↻ <recurrenceRule.toHumanReadable()>` badge (e.g. `↻ Every Sunday`) if `recurrenceRule != null`, rendered as `labelSmall` in muted accent color. No max-width truncation required — the longest possible string (`"Every 2 weeks on Monday"`, ~22 chars at labelSmall) fits within the draft card on landscape tablet at 1080p+.
 
 ---
 
@@ -373,3 +381,4 @@ The voice confirmation draft card shows:
 - Offline recurrence spawning / local queue for failed spawns
 - Schedule drift correction for unanchored weekly/monthly recurrences (rolling interval from completion is accepted behavior)
 - Notes field length guard (40-character metadata overhead is well within Google Tasks' 8192-character notes limit)
+- Task-to-calendar-event promotion for recurring tasks (promoted recurring tasks are out of scope; the recurrence rule travels with the task but has no effect on calendar events)
