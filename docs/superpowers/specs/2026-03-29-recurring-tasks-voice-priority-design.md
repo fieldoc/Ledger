@@ -148,6 +148,8 @@ data class RecurrenceRule(
      *   MONTHLY/1/null     → "Every month"
      *   MONTHLY/3/null     → "Every 3 months"
      * Ordinal suffixes for monthly anchor: 1st, 2nd, 3rd, 4th–20th, 21st, 22nd, 23rd, 24th–30th, 31st.
+     * Note: 11, 12, and 13 always use "th" (not "st"/"nd"/"rd") — they fall within the 4–20 range.
+     * Do not use a naive "ends-in-1 → st" rule; check the 11–13 exceptions explicitly.
      */
     fun toHumanReadable(): String
 }
