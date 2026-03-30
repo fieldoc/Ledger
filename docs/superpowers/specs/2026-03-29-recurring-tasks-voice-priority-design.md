@@ -52,7 +52,15 @@ All metadata is encoded as `||KEY:VALUE||` tags prepended to the `notes` field. 
 
 **Null/empty bridging rule:** In the tag wire format, an absent anchor is encoded as an empty string (e.g. `||RECUR:daily:1:||`). `decode()` maps an empty string anchor field to `null` in `RecurrenceRule.anchor`. `encode()` maps `null` anchor back to an empty string. This bridging is the responsibility of `TaskMetadata` — no other code should read or write the raw tag format.
 
+**Decode regex:** `decode()` identifies tag blocks using the pattern `\|\|([A-Z]+:[^|]*)\|\|` (greedy match of uppercase key followed by colon-separated values, bounded by `||` delimiters). Any `||` sequences in user notes that do not match this pattern are left in `cleanNotes` unmodified. Tags are matched and removed left-to-right; the remainder after stripping all matches is `cleanNotes`.
+
+**Canonical tag order:** `encode()` always writes tags in this order: RECUR first (if present), then PRIORITY (if present), then user notes. This order is normative — tests should assert it.
+
 **Malformed tag guard:** If a `||RECUR:...||` block cannot be parsed (missing fields, unknown frequency), `decode()` silently ignores it and returns `recurrenceRule = null`. No exception is thrown.
+
+**Round-trip with embedded `||` in user notes:** `encode()` does not sanitize `notes` for embedded `||` sequences. If user notes contain `||`, the combined string may confuse the decoder. This is an accepted known limitation (see Section 4 intro). No escaping is performed.
+
+**PRIORITY tag case-sensitivity:** `decode()` calls `.uppercase()` on the PRIORITY tag value before mapping to `TaskPriority`. The tag format is case-insensitive on read; `encode()` always writes lowercase (`high`).
 
 **Examples:**
 
@@ -99,30 +107,47 @@ data class RecurrenceRule(
     val anchor: String?        // "MONDAY"-"SUNDAY" for weekly; "1"-"31" for monthly; null = no anchor
 ) {
     /**
-     * Calculate the next due date after [from].
-     * For WEEKLY with anchor: snaps to the specified day-of-week, then adds (interval-1)*7 days.
-     * For WEEKLY without anchor: pure interval — from + interval*7 days.
-     * These two paths intentionally produce different cadences: anchored weekly recurrence
-     * normalizes to a fixed day; unanchored is a pure rolling interval from completion.
-     * For MONTHLY with day anchor: same day-of-month, interval months ahead.
-     *   The anchor day is preserved in the tag even after clamping to month-end;
-     *   February of a 31st-anchor task clamps to the 28th/29th but the next month
-     *   recalculates from the original anchor, not the clamped date.
-     * For MONTHLY without anchor: from + interval*30 days (approximation).
+     * Returns the next due date after [from] according to this rule.
+     *
+     * DAILY: returns from + interval days.
+     *
+     * WEEKLY with valid anchor (full English day name, e.g. "SUNDAY"):
+     *   Result = earliest date >= (from + interval*7) that falls on anchor day-of-week.
+     *   If (from + interval*7) already falls on anchor day, it is returned as-is (zero advancement).
+     *   If anchor is null or invalid, falls back to WEEKLY no-anchor path.
+     *
+     * WEEKLY without anchor (or invalid anchor):
+     *   Returns from + interval*7 days. Pure rolling interval.
+     *
+     * MONTHLY with valid anchor ("1"-"31"):
+     *   Returns the date interval months after from, on day anchor.toInt(), clamped to month end.
+     *   Always reads anchor from this RecurrenceRule — never from from.dayOfMonth.
+     *   Always computes the target day from anchor.toInt(), so clamped dates never corrupt future spawns.
+     *   If anchor is null or invalid (e.g. "32", "FUNDAY"), falls back to MONTHLY no-anchor path.
+     *
+     * MONTHLY without anchor:
+     *   Returns from + interval*30 days (approximation).
+     *
+     * This function is pure: it never modifies RecurrenceRule.anchor.
+     * No upper bound is enforced on interval; unreasonably large values produce distant future dates.
+     * No maximum interval cap is applied.
      */
     fun nextDueDate(from: LocalDate): LocalDate
 
     /**
      * Human-readable label for display in draft cards and recurrence indicators.
+     * Anchor values use full uppercase day names (e.g. "SUNDAY", "MONDAY") matching the wire format.
      * Examples:
-     *   DAILY/1       → "Every day"
-     *   DAILY/2       → "Every 2 days"
-     *   WEEKLY/1/SUN  → "Every Sunday"
-     *   WEEKLY/2/MON  → "Every 2 weeks on Monday"
-     *   WEEKLY/2/null → "Every 2 weeks"
-     *   MONTHLY/1/15  → "Every month on the 15th"
-     *   MONTHLY/1/null→ "Every month"
-     *   MONTHLY/3/null→ "Every 3 months"
+     *   DAILY/1/null       → "Every day"
+     *   DAILY/2/null       → "Every 2 days"
+     *   WEEKLY/1/SUNDAY    → "Every Sunday"
+     *   WEEKLY/1/null      → "Every week"
+     *   WEEKLY/2/MONDAY    → "Every 2 weeks on Monday"
+     *   WEEKLY/2/null      → "Every 2 weeks"
+     *   MONTHLY/1/15       → "Every month on the 15th"
+     *   MONTHLY/1/null     → "Every month"
+     *   MONTHLY/3/null     → "Every 3 months"
+     * Ordinal suffixes for monthly anchor: 1st, 2nd, 3rd, 4th–20th, 21st, 22nd, 23rd, 24th–30th, 31st.
      */
     fun toHumanReadable(): String
 }
@@ -132,12 +157,22 @@ enum class TaskPriority { HIGH, NORMAL }
 object TaskMetadata {
     /**
      * Encode recurrence and priority as ||...|| tags prepended to [notes].
-     * NORMAL priority produces no PRIORITY tag (absence = normal).
+     * Tag order: RECUR first (if present), then PRIORITY (if present), then notes.
+     * NORMAL priority produces no PRIORITY tag.
      * Null recurrence produces no RECUR tag.
+     * Returns empty string (not null) when all inputs are null/default (no recurrence, NORMAL, null notes).
+     * Callers may pass this return value directly to createTask(notes=...) — an empty notes string
+     * is acceptable to the Google Tasks API and is treated as "clear notes."
+     * encode() does NOT sanitize notes for embedded || sequences.
      */
     fun encode(notes: String?, recurrence: RecurrenceRule?, priority: TaskPriority): String
 
-    /** Strip all ||...|| tags and parse into structured metadata + clean display notes. */
+    /**
+     * Strip all ||KEY:value|| tag blocks from rawNotes and parse into structured metadata.
+     * Uses regex \|\|([A-Z]+:[^|]*)\|\| to identify tags. Non-matching || sequences pass through unchanged.
+     * decode() calls .uppercase() on tag values before enum mapping — tags are case-insensitive on read.
+     * Malformed or unrecognized tag blocks are silently discarded.
+     */
     fun decode(rawNotes: String?): DecodedMetadata
 }
 
@@ -152,7 +187,7 @@ Performance note: `TaskMetadata.decode()` is called once per task during `toAppT
 
 ### 5.2 Extended `Task` model
 
-The existing `Task` data class already has a `notes: String?` field that holds the raw Google Tasks notes value as returned by the API. This field is unchanged — it continues to store raw notes including any `||...||` tags. Three new fields are added:
+The existing `Task` data class (in `data/model/Task.kt`) already has a `notes: String?` field that holds the raw Google Tasks notes value as returned by the API. This field is unchanged — it continues to store raw notes including any `||...||` tags. Three new fields are added:
 
 ```kotlin
 data class Task(
@@ -163,7 +198,7 @@ data class Task(
 )
 ```
 
-`Task` is populated from `toAppTask()` by decoding the raw `notes` field via `TaskMetadata.decode()`:
+`Task` is populated from `toAppTask()`, a private extension function on `com.google.api.services.tasks.model.Task` in `data/repository/GoogleTasksRepository.kt`. It decodes the raw `notes` field via `TaskMetadata.decode()`:
 - `task.recurrenceRule` ← `decoded.recurrenceRule`
 - `task.priority` ← `decoded.priority`
 - `task.cleanNotes` ← `decoded.cleanNotes`
@@ -190,10 +225,10 @@ data class ParsedVoiceTaskItem(
 | Frequency | Anchor | Calculation |
 |---|---|---|
 | DAILY | — | `from + interval days` |
-| WEEKLY | day-of-week | `candidate = from + interval * 7`; then advance `candidate` forward day-by-day until it lands on `anchor` day-of-week. **Example (interval=2, anchor=MONDAY):** from=Sunday March 29 → candidate = March 29+14 = Sunday April 12 → advance to next Monday = **April 13**. For interval=1, anchor=MONDAY: from=Sunday March 29 → candidate = April 5 (Sunday) → advance to April 6 (Monday). |
-| WEEKLY | none | `from + interval * 7 days`. Pure rolling interval — does not snap to a weekday. **Note:** Unanchored weekly/monthly tasks use rolling intervals from the completion date, not a fixed calendar cadence. Over time, a "complete late" pattern will cause the schedule to drift. This is accepted behavior — see Section 13. |
-| MONTHLY | day number | Day `anchor.toInt()` of the month that is `interval` months after `from.month`. Clamp to last day of that month if needed. `nextDueDate()` is pure — it never modifies `RecurrenceRule.anchor`; clamping applies only to the returned `LocalDate`. The original anchor is preserved in the tag for all future spawns. |
-| MONTHLY | none | `from + interval * 30 days` (approximation). Subject to the same rolling-interval drift as unanchored WEEKLY. |
+| WEEKLY | valid day-of-week | Result = earliest date >= (from + interval×7) that falls on anchor day-of-week. If (from + interval×7) already falls on anchor day, it is returned as-is (zero advancement). **Example (interval=2, MONDAY):** from=Sun March 29 → March 29+14=Sun April 12 → next Monday = **April 13**. **Example (interval=1, MONDAY):** from=Sun March 29 → March 29+7=Sun April 5 → next Monday = **April 6**. **Example (from is already anchor day, interval=1, MONDAY):** from=Mon March 30 → March 30+7=Mon April 6 → already Monday → return **April 6**. |
+| WEEKLY | null or invalid | `from + interval * 7 days`. Pure rolling interval — does not snap to a weekday. Unanchored weekly/monthly tasks use rolling intervals; "complete late" causes drift. This is accepted — see Section 13. |
+| MONTHLY | valid "1"–"31" | `anchor.toInt()`-th day of the month that is `interval` months after `from.month`, clamped to month end if needed. Always reads day from `anchor`, never from `from.dayOfMonth`. Always computes from original anchor — clamped dates never corrupt future spawns. |
+| MONTHLY | null or invalid | `from + interval * 30 days` (approximation). |
 
 ### 6.1 First-occurrence date for recurring tasks with no spoken due date
 
@@ -360,13 +395,13 @@ The draft card shows:
 
 | File | Change |
 |---|---|
-| `data/model/TaskMetadata.kt` | **New** — RecurrenceRule, TaskPriority, TaskMetadata, DecodedMetadata |
-| `data/model/Task.kt` | Add `recurrenceRule`, `priority`, `cleanNotes` fields; decode in `toAppTask()`; migrate display from `notes` to `cleanNotes` |
-| `data/repository/GoogleTasksRepository.kt` | Add `notes` param to `createTask()` |
-| `capture/repository/GeminiCaptureRepository.kt` | Extend `ParsedVoiceTaskItem`; extend prompt with sections 9–10; extend `parseVoiceResponseJson()` with recurrence + priority deserialization |
-| `viewmodel/TaskWallViewModel.kt` | Spawn next recurrence on completion; offline guard; pass notes + parentId to createTask |
-| `ui/components/TaskItem.kt` | Priority pip; recurrence glyph; migrate any `task.notes` display to `task.cleanNotes` |
-| `ui/screens/TaskWallScreen.kt` | Draft card preview: recurrence badge (`↻ toHumanReadable()`) + priority pip |
+| `data/model/TaskMetadata.kt` | **New** — `RecurrenceRule`, `TaskPriority`, `TaskMetadata`, `DecodedMetadata` |
+| `data/model/Task.kt` | Add `recurrenceRule`, `priority`, `cleanNotes` fields; `taskDisplayComparator` (top-level fn in this file) updated with priority sort tier |
+| `data/repository/GoogleTasksRepository.kt` | Add `notes` param to `createTask()`; update `toAppTask()` (private extension fn in this file) to call `TaskMetadata.decode()`; `completeTask()` already accepts `taskListId: String` — no signature change needed |
+| `capture/repository/GeminiCaptureRepository.kt` | Extend `ParsedVoiceTaskItem`; add prompt sections 9–10 before JSON schema block in `buildVoicePromptV2()`; extend `parseVoiceResponseJson()` (private fn in this file) with recurrence + priority deserialization |
+| `viewmodel/TaskWallViewModel.kt` | Spawn next recurrence on completion; pre-flight offline guard; pass `notes` + `parentId` to `createTask()` |
+| `ui/components/TaskItem.kt` | Priority pip; recurrence glyph (`↻` / `Icons.Default.Autorenew`); migrate `task.notes` display to `task.cleanNotes` |
+| `ui/screens/TaskWallScreen.kt` | Draft card: recurrence badge (`↻ rule.toHumanReadable()`) + priority pip, read from `VoiceInputState.Preview` |
 
 ---
 
