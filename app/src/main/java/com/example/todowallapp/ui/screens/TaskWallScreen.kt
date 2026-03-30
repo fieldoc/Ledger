@@ -131,6 +131,7 @@ import androidx.core.content.ContextCompat
 import com.example.todowallapp.data.model.MockData
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskList
+import com.example.todowallapp.data.model.TaskPriority
 import com.example.todowallapp.data.model.TaskUrgency
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.ui.components.ClockHeader
@@ -1237,6 +1238,39 @@ fun TaskWallScreen(
                                             "Similar task already exists",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = colors.textSecondary.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                    // Priority pip for HIGH priority draft tasks
+                                    if (response.intent == VoiceIntent.ADD &&
+                                        task.priority == TaskPriority.HIGH) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(5.dp)
+                                                    .background(
+                                                        color = colors.accentPrimary.copy(alpha = 0.7f),
+                                                        shape = CircleShape
+                                                    )
+                                            )
+                                            Text(
+                                                "High priority",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = colors.accentPrimary.copy(alpha = 0.7f)
+                                            )
+                                        }
+                                    }
+                                    // Recurrence badge for recurring draft tasks
+                                    if (response.intent == VoiceIntent.ADD &&
+                                        task.recurrenceRule != null) {
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            "\u21BB ${task.recurrenceRule.toHumanReadable()}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colors.textSecondary.copy(alpha = 0.6f)
                                         )
                                     }
                                 }

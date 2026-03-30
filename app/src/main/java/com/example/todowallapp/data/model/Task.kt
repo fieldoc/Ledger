@@ -15,7 +15,13 @@ data class Task(
     val completedAt: LocalDateTime? = null,
     val position: String = "", // Google Tasks uses position for ordering
     val parentId: String? = null, // For subtasks
-    val updatedAt: LocalDateTime = LocalDateTime.now()
+    val updatedAt: LocalDateTime = LocalDateTime.now(),
+    /** Recurrence rule decoded from notes-field metadata tag. */
+    val recurrenceRule: RecurrenceRule? = null,
+    /** Priority decoded from notes-field metadata tag. */
+    val priority: TaskPriority = TaskPriority.NORMAL,
+    /** User-visible notes with ||...|| metadata tags stripped. */
+    val cleanNotes: String? = null
 ) {
     /**
      * Determines the urgency level of the task based on due date
@@ -48,6 +54,7 @@ private fun urgencySortRank(urgency: TaskUrgency): Int {
 fun taskDisplayComparator(today: LocalDate = LocalDate.now()): Comparator<Task> {
     return compareBy<Task> { it.isCompleted }
         .thenBy { urgencySortRank(it.getUrgencyLevel(today)) }
+        .thenBy { if (it.priority == TaskPriority.HIGH) 0 else 1 }
         .thenBy { it.dueDate ?: LocalDate.MAX }
         .thenBy { it.position.ifBlank { "~" } }
         .thenByDescending { it.updatedAt }

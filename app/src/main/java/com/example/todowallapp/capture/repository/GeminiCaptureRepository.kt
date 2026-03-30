@@ -5,6 +5,9 @@ import com.example.todowallapp.capture.model.ParsedCapture
 import com.example.todowallapp.data.model.BlockCategory
 import com.example.todowallapp.data.model.DayPlan
 import com.example.todowallapp.data.model.PlanBlock
+import com.example.todowallapp.data.model.RecurrenceFrequency
+import com.example.todowallapp.data.model.RecurrenceRule
+import com.example.todowallapp.data.model.TaskPriority
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -33,7 +36,9 @@ data class ParsedVoiceTaskItem(
     val newListName: String?,
     val parentTaskId: String?,
     val confidence: Float,
-    val duplicateOf: String?
+    val duplicateOf: String?,
+    val recurrenceRule: RecurrenceRule? = null,
+    val priority: TaskPriority = TaskPriority.NORMAL
 )
 
 data class ParsedVoiceResponse(
@@ -452,7 +457,13 @@ class GeminiCaptureRepository(
                      "newListName": "string|null",
                      "parentTaskId": "string|null",
                      "confidence": 0.0,
-                     "duplicateOf": "existing-task-id|null"
+                     "duplicateOf": "existing-task-id|null",
+                     "recurrence": {
+                       "frequency": "daily|weekly|monthly",
+                       "interval": 1,
+                       "anchor": "MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY|null"
+                     } or null,
+                     "priority": "high|normal"
                    }
                  ],
                  "clarification": "string|null"
@@ -461,7 +472,41 @@ class GeminiCaptureRepository(
                For "query" intent, tasks array may be empty.
                For "amend" intent, return the amended version as a single task.
 
-            9) CLEAN OUTPUT: No markdown, no commentary. Just the JSON.
+            9) RECURRENCE DETECTION
+               Detect if the user wants a repeating task. Set recurrence only when the user clearly expresses repetition — not for one-off tasks.
+
+               Signals: "every day", "every week", "once a week", "daily", "weekly", "monthly", "every Monday", "twice a week", "every other week", "every month on the 15th", "remind me every Friday"
+
+               - frequency: "daily", "weekly", or "monthly"
+               - interval: 1 for "every week/day/month", 2 for "every other week/biweekly", etc.
+               - anchor for WEEKLY: full English day name in UPPERCASE ("MONDAY"–"SUNDAY"), or null if no specific day mentioned
+               - anchor for MONTHLY: day-of-month as string ("1"–"31"), or null if no specific day mentioned
+               - anchor for DAILY: always null
+
+               Examples:
+               - "clean the kitchen every Sunday" → {"frequency":"weekly","interval":1,"anchor":"SUNDAY"}
+               - "take vitamins every day" → {"frequency":"daily","interval":1,"anchor":null}
+               - "pay rent on the first" → {"frequency":"monthly","interval":1,"anchor":"1"}
+               - "check in every other week" → {"frequency":"weekly","interval":2,"anchor":null}
+               - "buy groceries" (no repetition) → null
+
+               If there is any ambiguity about frequency or the user didn't clearly express repetition, set recurrence to null.
+
+            10) PRIORITY DETECTION
+                Detect HIGH priority when the user expresses genuine urgency or strong importance. Set priority to "high" only for clear signals — default is "normal".
+
+                HIGH priority signals:
+                - Explicit urgency: "urgent", "ASAP", "right away", "immediately", "as soon as possible"
+                - Strong need: "I really need to", "I NEED to make sure to", "I absolutely must", "I can't forget to"
+                - Consequence implied: "or we'll miss the deadline", "before it's too late", "really important"
+                - Emphasis words: "critical", "important", "priority", "crucial", "must"
+
+                NOT high priority (these are normal):
+                - "I should", "I want to", "remind me to", "I need to" (without emphasis)
+                - "eventually", "sometime", "when I get a chance"
+                - General hedging or casual phrasing
+
+            11) CLEAN OUTPUT: No markdown, no commentary. Just the JSON.
         """.trimIndent()
     }
 
@@ -561,6 +606,22 @@ class GeminiCaptureRepository(
                 val duplicateOf = obj.stringValue("duplicateOf")
                     ?.takeIf { dId -> existingTasks.any { it.id == dId } }
 
+                val recurrenceRule = runCatching {
+                    val rec = obj.getAsJsonObject("recurrence")
+                    if (rec == null || rec.isJsonNull) null
+                    else {
+                        val freqStr = rec.stringValue("frequency") ?: return@runCatching null
+                        val freq = RecurrenceFrequency.valueOf(freqStr.uppercase())
+                        val interval = rec.get("interval")?.asInt ?: 1
+                        val anchor = rec.stringValue("anchor")
+                        RecurrenceRule(freq, interval, anchor)
+                    }
+                }.getOrNull()
+
+                val priority = obj.stringValue("priority")?.let { raw ->
+                    runCatching { TaskPriority.valueOf(raw.uppercase()) }.getOrNull()
+                } ?: TaskPriority.NORMAL
+
                 ParsedVoiceTaskItem(
                     title = title,
                     dueDate = dueDate,
@@ -569,7 +630,9 @@ class GeminiCaptureRepository(
                     newListName = newListName,
                     parentTaskId = parentTaskId,
                     confidence = confidence.coerceIn(0f, 1f),
-                    duplicateOf = duplicateOf
+                    duplicateOf = duplicateOf,
+                    recurrenceRule = recurrenceRule,
+                    priority = priority
                 )
             }
         } else {
