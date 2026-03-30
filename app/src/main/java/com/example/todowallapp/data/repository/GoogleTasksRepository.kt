@@ -3,6 +3,7 @@ package com.example.todowallapp.data.repository
 import android.content.Context
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskList
+import com.example.todowallapp.data.model.TaskMetadata
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
@@ -191,7 +192,8 @@ class GoogleTasksRepository(
         taskListId: String,
         title: String,
         dueDate: LocalDate? = null,
-        parentId: String? = null
+        parentId: String? = null,
+        notes: String? = null
     ): Result<Task> = withContext(Dispatchers.IO) {
         withTasksService { service ->
             val googleTask = com.google.api.services.tasks.model.Task()
@@ -203,6 +205,10 @@ class GoogleTasksRepository(
                     .atOffset(ZoneOffset.UTC)
                     .toInstant()
                 googleTask.due = dueInstant.toString()
+            }
+
+            if (!notes.isNullOrEmpty()) {
+                googleTask.notes = notes
             }
 
             val insertRequest = service.tasks().insert(taskListId, googleTask)
@@ -231,18 +237,26 @@ class GoogleTasksRepository(
 
     /**
      * Convert a Google Tasks API Task to our app's Task model.
+     * Decodes ||...|| metadata tags from the notes field to populate
+     * recurrenceRule, priority, and cleanNotes.
      */
-    private fun com.google.api.services.tasks.model.Task.toAppTask(): Task = Task(
-        id = id ?: "",
-        title = title ?: "",
-        notes = notes,
-        isCompleted = status == "completed",
-        dueDate = parseDueDate(due),
-        position = position ?: "",
-        parentId = parent,
-        updatedAt = parseDateTime(updated) ?: LocalDateTime.MIN,
-        completedAt = if (status == "completed") parseDateTime(completed) else null
-    )
+    private fun com.google.api.services.tasks.model.Task.toAppTask(): Task {
+        val decoded = TaskMetadata.decode(notes)
+        return Task(
+            id = id ?: "",
+            title = title ?: "",
+            notes = notes,
+            isCompleted = status == "completed",
+            dueDate = parseDueDate(due),
+            position = position ?: "",
+            parentId = parent,
+            updatedAt = parseDateTime(updated) ?: LocalDateTime.MIN,
+            completedAt = if (status == "completed") parseDateTime(completed) else null,
+            recurrenceRule = decoded.recurrenceRule,
+            priority = decoded.priority,
+            cleanNotes = decoded.cleanNotes
+        )
+    }
 
     /**
      * Parse RFC 3339 timestamp to LocalDateTime, returning null for null or invalid input.
