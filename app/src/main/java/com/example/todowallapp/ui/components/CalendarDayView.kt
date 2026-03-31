@@ -75,6 +75,14 @@ sealed interface CalendarSlotItem {
         val slotCount: Int,
         val slots: List<CalendarTimeSlot>
     ) : CalendarSlotItem
+
+    data class EventSpan(
+        val startTime: LocalDateTime,
+        val endTime: LocalDateTime,
+        val slotCount: Int,
+        /** Parallel columns for side-by-side overlap rendering, left to right. */
+        val columns: List<List<CalendarEvent>>
+    ) : CalendarSlotItem
 }
 
 fun buildHalfHourSlots(
@@ -99,6 +107,64 @@ fun buildHalfHourSlots(
     return slots
 }
 
+/**
+ * Replaces consecutive slots that share the same event(s) with a single [CalendarSlotItem.EventSpan].
+ * Overlapping events (whose slot ranges intersect) are assigned to parallel columns using a greedy
+ * interval-scheduling sweep, matching the Google Calendar side-by-side layout style.
+ */
+fun extractEventSpans(slots: List<CalendarTimeSlot>): List<CalendarSlotItem> {
+    data class EventRange(val event: CalendarEvent, val first: Int, val last: Int)
+
+    val eventRanges = slots.flatMap { it.events }.distinctBy { it.id }.mapNotNull { event ->
+        val indices = slots.indices.filter { i -> event in slots[i].events }
+        if (indices.isEmpty()) null else EventRange(event, indices.first(), indices.last())
+    }
+    if (eventRanges.isEmpty()) return slots.map { CalendarSlotItem.SingleSlot(it) }
+
+    // Group events whose slot ranges overlap into clusters
+    val sorted = eventRanges.sortedBy { it.first }
+    val clusters = mutableListOf<MutableList<EventRange>>()
+    for (er in sorted) {
+        val existing = clusters.find { cluster -> cluster.any { it.last >= er.first } }
+        if (existing != null) existing += er else clusters += mutableListOf(er)
+    }
+
+    val spanByFirstSlot = mutableMapOf<Int, CalendarSlotItem.EventSpan>()
+    val covered = mutableSetOf<Int>()
+
+    for (cluster in clusters) {
+        val spanFirst = cluster.minOf { it.first }
+        val spanLast = cluster.maxOf { it.last }
+
+        // Greedy column assignment: find first column whose last event ends before this one starts
+        val columns = mutableListOf<MutableList<EventRange>>()
+        for (er in cluster.sortedBy { it.first }) {
+            val col = columns.indexOfFirst { col -> col.last().last < er.first }
+            if (col == -1) columns += mutableListOf(er) else columns[col] += er
+        }
+
+        spanByFirstSlot[spanFirst] = CalendarSlotItem.EventSpan(
+            startTime = slots[spanFirst].start,
+            endTime = slots[spanLast].start.plusMinutes(30),
+            slotCount = spanLast - spanFirst + 1,
+            columns = columns.map { col -> col.map { it.event } }
+        )
+        (spanFirst..spanLast).forEach { covered += it }
+    }
+
+    val result = mutableListOf<CalendarSlotItem>()
+    var i = 0
+    while (i < slots.size) {
+        val span = spanByFirstSlot[i]
+        when {
+            span != null -> { result += span; i += span.slotCount }
+            i in covered -> i++
+            else -> { result += CalendarSlotItem.SingleSlot(slots[i]); i++ }
+        }
+    }
+    return result
+}
+
 fun buildCompressedSlots(
     date: LocalDate,
     events: List<CalendarEvent>,
@@ -113,6 +179,8 @@ fun buildCompressedSlots(
         startHour = startHour,
         endHourExclusive = endHourExclusive
     )
+    // Extract event spans first so multi-slot events become single items before compression
+    val withSpans = extractEventSpans(allSlots)
 
     val isToday = date == now.toLocalDate()
     val nowWindowStart = now.minusHours(1)
@@ -129,7 +197,6 @@ fun buildCompressedSlots(
 
     fun flushEmptyRun() {
         if (emptyRun.isEmpty()) return
-
         if (emptyRun.size >= minimumCompressibleSlots) {
             result += CalendarSlotItem.CompressedRange(
                 startTime = emptyRun.first().start,
@@ -143,13 +210,20 @@ fun buildCompressedSlots(
         emptyRun = mutableListOf()
     }
 
-    allSlots.forEach { slot ->
-        val hasEvents = slot.events.isNotEmpty()
-        if (!hasEvents && !inNowWindow(slot)) {
-            emptyRun += slot
-        } else {
-            flushEmptyRun()
-            result += CalendarSlotItem.SingleSlot(slot)
+    for (item in withSpans) {
+        when (item) {
+            is CalendarSlotItem.SingleSlot -> {
+                if (!inNowWindow(item.slot)) {
+                    emptyRun += item.slot
+                } else {
+                    flushEmptyRun()
+                    result += item
+                }
+            }
+            else -> {
+                flushEmptyRun()
+                result += item
+            }
         }
     }
     flushEmptyRun()
@@ -225,6 +299,11 @@ fun CalendarDayView(
                         targetIdx = idx; break
                     }
                 }
+                is CalendarSlotItem.EventSpan -> {
+                    if (currentTime < item.endTime) {
+                        targetIdx = idx; break
+                    }
+                }
             }
         }
         // Scroll 2 items before current time → ~1 hour of past visible above
@@ -253,6 +332,8 @@ fun CalendarDayView(
                 is CalendarSlotItem.SingleSlot ->
                     allSlots.indexOfFirst { it.start == item.slot.start }
                 is CalendarSlotItem.CompressedRange ->
+                    allSlots.indexOfFirst { it.start == item.startTime }
+                is CalendarSlotItem.EventSpan ->
                     allSlots.indexOfFirst { it.start == item.startTime }
             }
         }
@@ -350,6 +431,7 @@ fun CalendarDayView(
                 when (item) {
                     is CalendarSlotItem.SingleSlot -> item.slot.start.toString()
                     is CalendarSlotItem.CompressedRange -> "compressed_${item.startTime}"
+                    is CalendarSlotItem.EventSpan -> "span_${item.startTime}"
                 }
             }
         ) { item ->
@@ -363,6 +445,22 @@ fun CalendarDayView(
                         slot = item.slot,
                         isSelectedSlot = item.slot.start == selectedSlotStart,
                         isInDragRange = slotInDragRange,
+                        selectedEventId = selectedEventId,
+                        taskListTitleByTaskId = taskListTitleByTaskId,
+                        taskUrgencyByTaskId = taskUrgencyByTaskId,
+                        now = now,
+                        onSlotActivated = onSlotActivated,
+                        onEventActivated = onEventActivated
+                    )
+                }
+
+                is CalendarSlotItem.EventSpan -> {
+                    val spanInDragRange = dragRange?.let { range ->
+                        item.startTime < range.endTime && item.endTime > range.startTime
+                    } == true
+                    EventSpanRow(
+                        span = item,
+                        isInDragRange = spanInDragRange,
                         selectedEventId = selectedEventId,
                         taskListTitleByTaskId = taskListTitleByTaskId,
                         taskUrgencyByTaskId = taskUrgencyByTaskId,
@@ -597,6 +695,182 @@ private fun CalendarSlotRow(
 }
 
 @Composable
+private fun EventSpanRow(
+    span: CalendarSlotItem.EventSpan,
+    isInDragRange: Boolean,
+    selectedEventId: String?,
+    taskListTitleByTaskId: Map<String, String>,
+    taskUrgencyByTaskId: Map<String, TaskUrgency>,
+    now: LocalDateTime,
+    onSlotActivated: (LocalDateTime) -> Unit,
+    onEventActivated: (CalendarEvent) -> Unit
+) {
+    val colors = LocalWallColors.current
+    val dims = rememberLayoutDimensions()
+    val isNowInSpan = now >= span.startTime && now < span.endTime
+
+    // Height matches the screen space this span replaces: N event-height rows + (N-1) inter-row gaps
+    val totalHeight = dims.daySlotHeightWithEvents * span.slotCount + 2.dp * (span.slotCount - 1)
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (isNowInSpan) Modifier.background(
+                    colors.accentPrimary.copy(alpha = 0.06f),
+                    RoundedCornerShape(6.dp)
+                ) else Modifier
+            )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(totalHeight)
+                .pointerInput(span.startTime) {
+                    detectTapGestures { onSlotActivated(span.startTime) }
+                },
+            verticalAlignment = Alignment.Top
+        ) {
+            // Time label — start time only, top-aligned
+            Text(
+                text = span.startTime.format(SlotTimeFormatter),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (isNowInSpan) colors.accentPrimary else colors.textSecondary,
+                modifier = Modifier
+                    .width(dims.dayTimeColumnWidth)
+                    .padding(
+                        end = if (dims.isLandscape) 6.dp else 10.dp,
+                        top = 8.dp
+                    )
+            )
+
+            // Side-by-side event columns — rendered directly to avoid IntrinsicSize.Min conflict
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(end = 8.dp, top = 3.dp, bottom = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                span.columns.forEach { columnEvents ->
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        columnEvents.forEach { event ->
+                            SpanEventCard(
+                                event = event,
+                                isSelected = event.id == selectedEventId,
+                                sourceTaskListTitle = event.sourceTaskId?.let(taskListTitleByTaskId::get),
+                                sourceTaskUrgency = event.sourceTaskId?.let(taskUrgencyByTaskId::get),
+                                onActivated = { onEventActivated(event) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Tall spanning event card used inside [EventSpanRow]. Unlike [EventChip] it fills its available
+ * height (determined by the parent Column weight) rather than wrapping content intrinsically.
+ * Shares the same visual language — spine bar, title, time range — but arranged for taller cards.
+ */
+@Composable
+private fun SpanEventCard(
+    event: CalendarEvent,
+    isSelected: Boolean,
+    sourceTaskListTitle: String?,
+    sourceTaskUrgency: TaskUrgency?,
+    onActivated: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalWallColors.current
+    val accentColor = when (sourceTaskUrgency) {
+        TaskUrgency.OVERDUE -> colors.urgencyOverdue
+        TaskUrgency.DUE_TODAY -> colors.urgencyDueToday
+        TaskUrgency.DUE_SOON -> colors.urgencyDueSoon
+        else -> colors.accentPrimary
+    }
+
+    val bg by animateColorAsState(
+        targetValue = when {
+            isSelected -> colors.accentPrimary.copy(alpha = 0.2f)
+            event.isPromotedTask -> accentColor.copy(alpha = 0.10f)
+            else -> colors.surfaceCard
+        },
+        animationSpec = tween(WallAnimations.SHORT),
+        label = "spanCardBg"
+    )
+
+    val borderCol by animateColorAsState(
+        targetValue = when {
+            isSelected -> colors.accentPrimary
+            event.isPromotedTask -> accentColor.copy(alpha = 0.5f)
+            else -> colors.borderColor
+        },
+        animationSpec = tween(WallAnimations.SHORT),
+        label = "spanCardBorder"
+    )
+
+    val timeRange = remember(event) {
+        val start = event.startDateTime
+        val end = event.endDateTime
+        if (start != null && end != null) {
+            "${start.format(SlotTimeFormatter)}\u2009\u2013\u2009${end.format(SlotTimeFormatter)}"
+        } else null
+    }
+
+    val cardShape = RoundedCornerShape(8.dp)
+    Row(
+        modifier = modifier
+            .clip(cardShape)
+            .background(bg)
+            .border(1.dp, borderCol, cardShape)
+            .clickable(onClick = onActivated)
+    ) {
+        // Left accent spine
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(3.dp)
+                .background(accentColor)
+        )
+        Column(
+            modifier = Modifier
+                .padding(start = 8.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
+        ) {
+            Text(
+                text = if (!sourceTaskListTitle.isNullOrBlank()) {
+                    "$sourceTaskListTitle \u2013 ${event.title}"
+                } else {
+                    event.title
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textPrimary,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (timeRange != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = timeRange,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textMuted
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun CompressedSlotRow(
     range: CalendarSlotItem.CompressedRange,
     isExpanded: Boolean,
@@ -646,7 +920,8 @@ private fun EventChip(
     isSelected: Boolean,
     sourceTaskListTitle: String?,
     sourceTaskUrgency: TaskUrgency?,
-    onActivated: () -> Unit
+    onActivated: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
     val accentColor = when (sourceTaskUrgency) {
@@ -686,7 +961,7 @@ private fun EventChip(
 
     val chipShape = RoundedCornerShape(6.dp)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .clip(chipShape)
             .background(bg)
             .border(1.dp, borderCol, chipShape)
