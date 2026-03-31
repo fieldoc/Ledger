@@ -58,7 +58,9 @@ nul
 .kotlin/
 
 # Tool-specific config (local to your machine)
-.claude/
+.claude/settings.local.json
+.claude/projects/
+.claude/worktrees/
 .gemini/
 .firecrawl/
 .serena/

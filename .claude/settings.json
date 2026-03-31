@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\": \"Serena auto-activation: if you have not yet called mcp__plugin_serena_serena__activate_project(project=ToDoWallApp) in this session, do it before the first code search. Check: if get_current_config returns no active project, activate now. Parameter reminder: find_symbol uses name_path_pattern, search_for_pattern uses substring_pattern — never swap these.\"}'",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
