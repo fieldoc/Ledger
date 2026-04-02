@@ -519,58 +519,6 @@ USER'S REQUEST:
         )
     }
 
-    /**
-     * Legacy wrapper: builds a flat prompt string for backward compatibility with
-     * DayOrganizerCoordinator. Will be removed in Task 5 when the coordinator is
-     * updated to use GeminiPrompt directly.
-     */
-    @Deprecated("Use buildDayPlanGeminiPrompt instead", replaceWith = ReplaceWith("buildDayPlanGeminiPrompt(rawTranscription, existingEvents, existingTasks, targetDate, currentTime)"))
-    fun buildDayPlanPrompt(
-        rawTranscription: String,
-        existingEvents: List<String>,
-        existingTasks: List<ExistingTaskRef>,
-        targetDate: LocalDate,
-        currentTime: LocalTime
-    ): String {
-        val prompt = buildDayPlanGeminiPrompt(rawTranscription, existingEvents, existingTasks, targetDate, currentTime)
-        return "${prompt.systemInstruction}\n\n${prompt.userContent}"
-    }
-
-    /**
-     * Legacy wrapper: builds a flat adjustment prompt for backward compatibility.
-     * Will be replaced by multi-turn in Task 5.
-     */
-    @Deprecated("Will be replaced by multi-turn in Task 5")
-    fun buildPlanAdjustmentPrompt(
-        adjustmentRequest: String,
-        previousPlanJson: String,
-        existingEvents: List<String>,
-        existingTasks: List<ExistingTaskRef>,
-        targetDate: LocalDate,
-        currentTime: LocalTime
-    ): String {
-        @Suppress("DEPRECATION")
-        val basePrompt = buildDayPlanPrompt(
-            rawTranscription = adjustmentRequest,
-            existingEvents = existingEvents,
-            existingTasks = existingTasks,
-            targetDate = targetDate,
-            currentTime = currentTime
-        )
-
-        return """
-$basePrompt
-
-IMPORTANT — ADJUSTMENT MODE:
-The user already has a plan and wants to modify it. Here is the current plan:
-
-$previousPlanJson
-
-Apply the user's requested changes while keeping the rest of the plan intact.
-Re-optimize timing if the change cascades (e.g., moving a block earlier frees a later slot).
-Return the COMPLETE updated plan, not just the changed blocks.
-""".trimIndent()
-    }
 
     fun parseDayPlanResponse(responseJson: String, targetDate: LocalDate): DayPlan {
         val root = JsonParser.parseString(responseJson).asJsonObject
@@ -611,34 +559,6 @@ Return the COMPLETE updated plan, not just the changed blocks.
             confidence = confidence,
             warning = warning
         ).validated()
-    }
-
-    /**
-     * Call Gemini for day planning using the unified client with DAY_PLAN_MODEL.
-     * Accepts a legacy flat prompt string for backward compatibility.
-     * Returns the raw JSON text from the response.
-     */
-    suspend fun callGeminiForDayPlan(apiKey: String, prompt: String): String = withContext(Dispatchers.IO) {
-        val requestBody = JsonObject().apply {
-            add("contents", JsonArray().apply {
-                add(JsonObject().apply {
-                    addProperty("role", "user")
-                    add("parts", JsonArray().apply {
-                        add(JsonObject().apply { addProperty("text", prompt) })
-                    })
-                })
-            })
-            add("generationConfig", buildGenerationConfig(temperature = 0.3, responseSchema = DAY_PLAN_SCHEMA))
-        }
-
-        val config = GeminiRequestConfig(
-            model = DAY_PLAN_MODEL,
-            connectTimeoutMs = 30_000,
-            readTimeoutMs = 45_000
-        )
-
-        val response = apiClient.generateContent(apiKey = apiKey, requestBody = requestBody, config = config)
-        extractTextFromGeminiResponse(response)
     }
 
     /**
