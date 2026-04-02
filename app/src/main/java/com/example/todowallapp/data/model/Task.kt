@@ -51,10 +51,16 @@ private fun urgencySortRank(urgency: TaskUrgency): Int {
     }
 }
 
+private fun prioritySortRank(priority: TaskPriority): Int = when (priority) {
+    TaskPriority.HIGH -> 0
+    TaskPriority.MEDIUM -> 1
+    TaskPriority.NORMAL -> 2
+}
+
 fun taskDisplayComparator(today: LocalDate = LocalDate.now()): Comparator<Task> {
     return compareBy<Task> { it.isCompleted }
+        .thenBy { prioritySortRank(it.priority) }
         .thenBy { urgencySortRank(it.getUrgencyLevel(today)) }
-        .thenBy { if (it.priority == TaskPriority.HIGH) 0 else 1 }
         .thenBy { it.dueDate ?: LocalDate.MAX }
         .thenBy { it.position.ifBlank { "~" } }
         .thenByDescending { it.updatedAt }
@@ -83,6 +89,13 @@ data class TaskList(
     val title: String,
     val updatedAt: LocalDateTime = LocalDateTime.now()
 )
+
+/**
+ * Quick filter categories for cross-list task filtering
+ */
+enum class TaskFilter {
+    OVERDUE, DUE_TODAY, DUE_THIS_WEEK, HIGH_PRIORITY, RECURRING
+}
 
 /**
  * Mock data for development and preview

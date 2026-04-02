@@ -220,6 +220,42 @@ class GoogleTasksRepository(
         }
     }
 
+    /**
+     * Move a task to a new position within a list.
+     * @param previousTaskId ID of the task to place after, or null to move to first position
+     */
+    suspend fun moveTask(
+        taskListId: String,
+        taskId: String,
+        previousTaskId: String? = null
+    ): Result<Task> = withContext(Dispatchers.IO) {
+        withTasksService { service ->
+            val request = service.tasks().move(taskListId, taskId)
+            if (previousTaskId != null) {
+                request.previous = previousTaskId
+            }
+            val movedTask = request.execute()
+            movedTask.toAppTask()
+        }
+    }
+
+    /**
+     * Update only the notes field of a task. Used for metadata changes
+     * (priority, recurrence) without touching other fields.
+     */
+    suspend fun updateTaskNotes(
+        taskListId: String,
+        taskId: String,
+        notes: String
+    ): Result<Task> = withContext(Dispatchers.IO) {
+        withTasksService { service ->
+            val currentTask = service.tasks().get(taskListId, taskId).execute()
+            currentTask.notes = notes.ifEmpty { null }
+            val updatedTask = service.tasks().update(taskListId, taskId, currentTask).execute()
+            updatedTask.toAppTask()
+        }
+    }
+
     companion object {
         /**
          * Detect whether an exception represents an auth/token error (401, expired token, etc.)

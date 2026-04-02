@@ -138,8 +138,13 @@ import com.example.todowallapp.ui.components.ClockHeader
 import com.example.todowallapp.ui.components.NextActionSpotlight
 import com.example.todowallapp.ui.components.SpotlightTask
 import com.example.todowallapp.ui.components.computeNextAction
+import com.example.todowallapp.data.model.RecurrenceRule
+import com.example.todowallapp.data.model.TaskFilter
+import com.example.todowallapp.ui.components.RecurrencePickerOverlay
+import com.example.todowallapp.ui.components.SearchFilterOverlay
 import com.example.todowallapp.ui.components.TaskContextMenu
 import com.example.todowallapp.ui.components.TaskContextMenuAction
+import com.example.todowallapp.ui.components.TaskDetailOverlay
 import com.example.todowallapp.ui.components.ViewSwitcherOption
 import com.example.todowallapp.ui.components.ViewSwitcherPill
 import com.example.todowallapp.ui.components.SettingsPanel
@@ -200,6 +205,7 @@ private data class FolderSectionModel(
 }
 
 private enum class FocusNodeType {
+    SEARCH_BUTTON,
     SETTINGS_BUTTON,
     FOLDER_HEADER,
     PENDING_PARENT,
@@ -218,6 +224,7 @@ private data class FocusNode(
 private fun folderHeaderKey(folderId: String): String = "folder-$folderId"
 private fun taskFocusKey(folderId: String, taskId: String): String = "task-$folderId-$taskId"
 private fun completedHeaderKey(folderId: String): String = "completed-$folderId"
+private const val SearchButtonKey = "search-button"
 private const val SettingsButtonKey = "settings-button"
 
 private enum class AmbientTier { ACTIVE, QUIET, SLEEP }
@@ -291,6 +298,24 @@ fun TaskWallScreen(
     ambientLightMonitoringEnabled: Boolean = true,
     onSetBrightness: (Float) -> Unit = {},
     transientMessage: String? = null,
+    // Search, filter, reorder, priority, recurrence
+    isSearchActive: Boolean = false,
+    searchQuery: String? = null,
+    activeFilters: Set<TaskFilter> = emptySet(),
+    filteredTasks: List<Pair<Task, String>> = emptyList(),
+    reorderModeTaskId: String? = null,
+    onToggleFilter: (TaskFilter) -> Unit = {},
+    onSetSearchQuery: (String) -> Unit = {},
+    onClearSearch: () -> Unit = {},
+    onSetPriority: (Task, TaskPriority) -> Unit = { _, _ -> },
+    onEnterReorder: (String) -> Unit = {},
+    onMoveReorder: (Int) -> Boolean = { false },
+    onConfirmReorder: () -> Unit = {},
+    onCancelReorder: () -> Unit = {},
+    onPinToTop: (Task) -> Unit = {},
+    onSetRecurrence: (Task, RecurrenceRule) -> Unit = { _, _ -> },
+    onRemoveRecurrence: (Task) -> Unit = {},
+    onSkipRecurrence: (Task) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -319,25 +344,64 @@ fun TaskWallScreen(
     var voicePreviewFocus by remember { mutableIntStateOf(0) } // 0=Confirm, 1=Cancel
     var lastEncoderClickTimeMs by remember { mutableLongStateOf(0L) }
     var pendingClickJob by remember { mutableStateOf<Job?>(null) }
+    // New overlay states
+    var showSearchOverlay by remember { mutableStateOf(false) }
+    var searchOverlayIndex by remember { mutableIntStateOf(0) }
+    var showDetailOverlay by remember { mutableStateOf(false) }
+    var detailTask by remember { mutableStateOf<Task?>(null) }
+    var detailListName by remember { mutableStateOf("") }
+    var showRecurrencePicker by remember { mutableStateOf(false) }
+    var recurrencePickerTask by remember { mutableStateOf<Task?>(null) }
+    var recurrencePickerIndex by remember { mutableIntStateOf(0) }
+    var isSearchFocused by remember { mutableStateOf(false) }
     val viewSwitcherOptions = remember {
         listOf(
             ViewSwitcherOption(key = "tasks", label = "Tasks"),
             ViewSwitcherOption(key = "calendar", label = "Calendar")
         )
     }
-    val pendingContextMenuActions = remember {
-        listOf(
-            TaskContextMenuAction(id = "schedule", label = "Schedule Task"),
-            TaskContextMenuAction(id = "delete", label = "Delete Task", isDestructive = true)
-        )
+    val contextMenuActions = remember(contextMenuTask) {
+        val task = contextMenuTask ?: return@remember emptyList()
+        if (task.isCompleted) {
+            listOf(
+                TaskContextMenuAction(id = "details", label = "View Details"),
+                TaskContextMenuAction(id = "restore", label = "Restore to Pending"),
+                TaskContextMenuAction(id = "delete", label = "Delete Task", isDestructive = true)
+            )
+        } else {
+            buildList {
+                add(TaskContextMenuAction(id = "details", label = "View Details"))
+                add(TaskContextMenuAction(
+                    id = "priority",
+                    label = "Priority",
+                    trailingIndicator = when (task.priority) {
+                        TaskPriority.HIGH -> "\u25CF"
+                        TaskPriority.MEDIUM -> "\u25D0"
+                        TaskPriority.NORMAL -> null
+                    },
+                    subActions = listOf(
+                        TaskContextMenuAction(id = "priority_high", label = "\u25CF  High",
+                            trailingIndicator = if (task.priority == TaskPriority.HIGH) "\u2713" else null),
+                        TaskContextMenuAction(id = "priority_medium", label = "\u25D0  Medium",
+                            trailingIndicator = if (task.priority == TaskPriority.MEDIUM) "\u2713" else null),
+                        TaskContextMenuAction(id = "priority_normal", label = "\u25CB  Normal",
+                            trailingIndicator = if (task.priority == TaskPriority.NORMAL) "\u2713" else null)
+                    )
+                ))
+                add(TaskContextMenuAction(id = "reorder", label = "Reorder"))
+                add(TaskContextMenuAction(id = "pin_top", label = "Pin to Top"))
+                if (task.recurrenceRule == null) {
+                    add(TaskContextMenuAction(id = "set_recurrence", label = "Make Recurring"))
+                } else {
+                    add(TaskContextMenuAction(id = "edit_recurrence", label = "Edit Recurrence"))
+                    add(TaskContextMenuAction(id = "skip_recurrence", label = "Skip This Time"))
+                    add(TaskContextMenuAction(id = "remove_recurrence", label = "Remove Recurrence"))
+                }
+                add(TaskContextMenuAction(id = "schedule", label = "Schedule Task"))
+                add(TaskContextMenuAction(id = "delete", label = "Delete Task", isDestructive = true))
+            }
+        }
     }
-    val completedContextMenuActions = remember {
-        listOf(
-            TaskContextMenuAction(id = "restore", label = "Restore to Pending"),
-            TaskContextMenuAction(id = "delete", label = "Delete Task", isDestructive = true)
-        )
-    }
-    val contextMenuActions = if (contextMenuTask?.isCompleted == true) completedContextMenuActions else pendingContextMenuActions
 
     // Focus breadcrumb state (Task 5)
     val breadcrumbVisible = remember { Animatable(0f) }
@@ -619,9 +683,14 @@ fun TaskWallScreen(
             performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             return
         }
-        if (selectedNode?.type == FocusNodeType.SETTINGS_BUTTON) {
+        if (selectedNode?.type == FocusNodeType.SEARCH_BUTTON) {
             isViewSwitcherFocused = true
-
+            performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+            return
+        }
+        if (selectedNode?.type == FocusNodeType.SETTINGS_BUTTON) {
+            // Move to search button (which is before settings in focus order)
+            selectedFocusKey = SearchButtonKey
             performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             return
         }
@@ -673,6 +742,11 @@ fun TaskWallScreen(
         }
         val selectedNode = selectedFocusKey?.let(focusIndexByKey::get)?.let(focusOrder::getOrNull) ?: return
         when (selectedNode.type) {
+            FocusNodeType.SEARCH_BUTTON -> {
+                performAppHaptic(view, context, AppHapticPattern.CONFIRM)
+                showSearchOverlay = true
+                searchOverlayIndex = 0
+            }
             FocusNodeType.SETTINGS_BUTTON -> {
                 performAppHaptic(view, context, AppHapticPattern.CONFIRM)
                 showSettings = true
@@ -796,15 +870,37 @@ fun TaskWallScreen(
                                     val action = contextMenuActions.getOrNull(contextMenuSelectedIndex)
                                     val task = contextMenuTask
                                     if (action != null && task != null) {
-                                        when (action.id) {
-                                            "schedule" -> onScheduleTask(task)
-                                            "restore" -> onTaskToggle(task)
-                                            "delete" -> onTaskDelete(task)
+                                        // Handle sub-menus: if action has subActions, it's handled by the composable
+                                        if (action.subActions == null) {
+                                            when (action.id) {
+                                                "details" -> {
+                                                    detailTask = task
+                                                    detailListName = taskLists
+                                                        .firstOrNull { lwt -> lwt.tasks.any { it.id == task.id } }
+                                                        ?.taskList?.title ?: "Unknown"
+                                                    showDetailOverlay = true
+                                                }
+                                                "priority_high" -> onSetPriority(task, TaskPriority.HIGH)
+                                                "priority_medium" -> onSetPriority(task, TaskPriority.MEDIUM)
+                                                "priority_normal" -> onSetPriority(task, TaskPriority.NORMAL)
+                                                "reorder" -> onEnterReorder(task.id)
+                                                "pin_top" -> onPinToTop(task)
+                                                "set_recurrence", "edit_recurrence" -> {
+                                                    recurrencePickerTask = task
+                                                    recurrencePickerIndex = 0
+                                                    showRecurrencePicker = true
+                                                }
+                                                "skip_recurrence" -> onSkipRecurrence(task)
+                                                "remove_recurrence" -> onRemoveRecurrence(task)
+                                                "schedule" -> onScheduleTask(task)
+                                                "restore" -> onTaskToggle(task)
+                                                "delete" -> onTaskDelete(task)
+                                            }
+                                            contextMenuTask = null
+                                            contextMenuSelectedIndex = 0
                                         }
                                         performAppHaptic(view, context, AppHapticPattern.CONFIRM)
                                     }
-                                    contextMenuTask = null
-                                    contextMenuSelectedIndex = 0
                                 }
                                 else -> {
                                     contextMenuTask = null
@@ -813,6 +909,70 @@ fun TaskWallScreen(
                             }
                         }
                         else -> Unit
+                    }
+                    return@onKeyEvent true
+                }
+                // Reorder mode — CW/CCW moves task, click confirms
+                if (reorderModeTaskId != null) {
+                    when (keyEvent.type) {
+                        KeyEventType.KeyDown -> {
+                            when (keyEvent.key) {
+                                Key.DirectionDown, Key.DirectionLeft -> {
+                                    onMoveReorder(1)
+                                    performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+                                }
+                                Key.DirectionUp, Key.DirectionRight -> {
+                                    onMoveReorder(-1)
+                                    performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+                                }
+                                Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
+                                    onConfirmReorder()
+                                    performAppHaptic(view, context, AppHapticPattern.CONFIRM)
+                                }
+                                Key.Escape, Key.Back -> {
+                                    onCancelReorder()
+                                }
+                                else -> Unit
+                            }
+                        }
+                        else -> Unit
+                    }
+                    return@onKeyEvent true
+                }
+                // Search/filter/detail/recurrence overlays — dismiss on Escape
+                if (showSearchOverlay || showDetailOverlay || showRecurrencePicker) {
+                    if (keyEvent.type == KeyEventType.KeyDown) {
+                        when (keyEvent.key) {
+                            Key.Escape, Key.Back -> {
+                                showSearchOverlay = false
+                                showDetailOverlay = false
+                                showRecurrencePicker = false
+                                recurrencePickerTask = null
+                                detailTask = null
+                            }
+                            Key.DirectionUp, Key.DirectionRight -> {
+                                if (showSearchOverlay) {
+                                    searchOverlayIndex = (searchOverlayIndex - 1).coerceAtLeast(0)
+                                    performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+                                }
+                                if (showRecurrencePicker) {
+                                    recurrencePickerIndex = (recurrencePickerIndex - 1).coerceAtLeast(0)
+                                    performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+                                }
+                            }
+                            Key.DirectionDown, Key.DirectionLeft -> {
+                                if (showSearchOverlay) {
+                                    val maxIndex = TaskFilter.entries.size + 1 // voice + filters + clear
+                                    searchOverlayIndex = (searchOverlayIndex + 1).coerceAtMost(maxIndex)
+                                    performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+                                }
+                                if (showRecurrencePicker) {
+                                    recurrencePickerIndex = (recurrencePickerIndex + 1).coerceAtMost(5) // 4 patterns + custom + cancel
+                                    performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+                                }
+                            }
+                            else -> Unit
+                        }
                     }
                     return@onKeyEvent true
                 }
@@ -1116,6 +1276,25 @@ fun TaskWallScreen(
             onActionSelected = { action ->
                 val task = contextMenuTask ?: return@TaskContextMenu
                 when (action.id) {
+                    "details" -> {
+                        detailTask = task
+                        detailListName = taskLists
+                            .firstOrNull { lwt -> lwt.tasks.any { it.id == task.id } }
+                            ?.taskList?.title ?: "Unknown"
+                        showDetailOverlay = true
+                    }
+                    "priority_high" -> onSetPriority(task, TaskPriority.HIGH)
+                    "priority_medium" -> onSetPriority(task, TaskPriority.MEDIUM)
+                    "priority_normal" -> onSetPriority(task, TaskPriority.NORMAL)
+                    "reorder" -> onEnterReorder(task.id)
+                    "pin_top" -> onPinToTop(task)
+                    "set_recurrence", "edit_recurrence" -> {
+                        recurrencePickerTask = task
+                        recurrencePickerIndex = 0
+                        showRecurrencePicker = true
+                    }
+                    "skip_recurrence" -> onSkipRecurrence(task)
+                    "remove_recurrence" -> onRemoveRecurrence(task)
                     "schedule" -> onScheduleTask(task)
                     "restore" -> onTaskToggle(task)
                     "delete" -> onTaskDelete(task)
@@ -1128,6 +1307,87 @@ fun TaskWallScreen(
                 contextMenuSelectedIndex = 0
             }
         )
+
+        // Task Detail overlay
+        TaskDetailOverlay(
+            visible = showDetailOverlay,
+            task = detailTask,
+            listName = detailListName,
+            onDismiss = { showDetailOverlay = false; detailTask = null }
+        )
+
+        // Search & Filter overlay
+        SearchFilterOverlay(
+            visible = showSearchOverlay,
+            activeFilters = activeFilters,
+            selectedIndex = searchOverlayIndex,
+            hasActiveSearch = searchQuery != null,
+            onVoiceSearch = {
+                showSearchOverlay = false
+                startVoiceWithPermission()
+            },
+            onToggleFilter = { filter ->
+                onToggleFilter(filter)
+            },
+            onClearAll = {
+                onClearSearch()
+                showSearchOverlay = false
+            },
+            onDismiss = { showSearchOverlay = false }
+        )
+
+        // Recurrence Picker overlay
+        RecurrencePickerOverlay(
+            visible = showRecurrencePicker,
+            currentRule = recurrencePickerTask?.recurrenceRule,
+            taskDueDate = recurrencePickerTask?.dueDate,
+            selectedIndex = recurrencePickerIndex,
+            onSelectRule = { rule ->
+                recurrencePickerTask?.let { task -> onSetRecurrence(task, rule) }
+                showRecurrencePicker = false
+                recurrencePickerTask = null
+            },
+            onDismiss = {
+                showRecurrencePicker = false
+                recurrencePickerTask = null
+            }
+        )
+
+        // Active filter indicator
+        if (isSearchActive) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp)
+            ) {
+                val filterLabel = buildString {
+                    append("\uD83D\uDD0D ")
+                    if (searchQuery != null) append("\"$searchQuery\" ")
+                    if (activeFilters.isNotEmpty()) {
+                        append(activeFilters.joinToString(" \u00B7 ") { filter ->
+                            when (filter) {
+                                TaskFilter.OVERDUE -> "Overdue"
+                                TaskFilter.DUE_TODAY -> "Due Today"
+                                TaskFilter.DUE_THIS_WEEK -> "Due This Week"
+                                TaskFilter.HIGH_PRIORITY -> "High Priority"
+                                TaskFilter.RECURRING -> "Recurring"
+                            }
+                        })
+                    }
+                }
+                Text(
+                    text = filterLabel.trim(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textMuted,
+                    modifier = Modifier
+                        .background(
+                            colors.surfaceElevated.copy(alpha = 0.9f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+        }
 
         // Voice FAB — visible when task list is populated and not in ambient/voice mode
         if (!isAmbientMode && !isLoading && taskLists.isNotEmpty() && voiceState is VoiceInputState.Idle && !showSettings) {
@@ -1715,6 +1975,7 @@ private fun buildPendingTaskGroups(tasks: List<Task>, subtaskProgressByParentId:
 
 private fun buildFocusOrder(models: List<FolderSectionModel>, expandedFolderId: String?): List<FocusNode> {
     val focusOrder = mutableListOf<FocusNode>()
+    focusOrder += FocusNode(key = SearchButtonKey, folderId = "", type = FocusNodeType.SEARCH_BUTTON)
     focusOrder += FocusNode(key = SettingsButtonKey, folderId = "", type = FocusNodeType.SETTINGS_BUTTON)
     models.forEach { model ->
         val folderId = model.taskList.id

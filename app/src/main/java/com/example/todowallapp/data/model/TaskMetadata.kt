@@ -6,7 +6,7 @@ import java.time.temporal.TemporalAdjusters
 
 enum class RecurrenceFrequency { DAILY, WEEKLY, MONTHLY }
 
-enum class TaskPriority { HIGH, NORMAL }
+enum class TaskPriority { HIGH, MEDIUM, NORMAL }
 
 data class RecurrenceRule(
     val frequency: RecurrenceFrequency,
@@ -151,6 +151,8 @@ object TaskMetadata {
         }
         if (priority == TaskPriority.HIGH) {
             sb.append("||PRIORITY:high||")
+        } else if (priority == TaskPriority.MEDIUM) {
+            sb.append("||PRIORITY:medium||")
         }
         if (!preferredTime.isNullOrEmpty()) {
             sb.append("||PREFERRED:${preferredTime.lowercase()}||")

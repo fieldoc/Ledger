@@ -3,6 +3,7 @@ package com.example.todowallapp.ui.components
 import com.example.todowallapp.ui.theme.LocalWallColors
 import com.example.todowallapp.ui.theme.urgencyColor
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
@@ -106,6 +107,7 @@ fun TaskItem(
     subtaskProgress: SubtaskProgress? = null,
     isExpanded: Boolean = false,
     holdProgressFraction: Float = 0f,
+    listNameBadge: String? = null,
     today: LocalDate = LocalDate.now(),
     onClick: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
@@ -129,6 +131,7 @@ fun TaskItem(
             subtaskProgress = subtaskProgress,
             isExpanded = isExpanded,
             holdProgressFraction = holdProgressFraction,
+            listNameBadge = listNameBadge,
             today = today,
             checkmarkAlpha = checkmarkAlpha,
             completionContentAlpha = completionContentAlpha,
@@ -153,6 +156,7 @@ private fun TaskItemContent(
     subtaskProgress: SubtaskProgress?,
     isExpanded: Boolean,
     holdProgressFraction: Float,
+    listNameBadge: String?,
     today: LocalDate,
     checkmarkAlpha: Float,
     completionContentAlpha: Float,
@@ -320,16 +324,28 @@ private fun TaskItemContent(
                     .fillMaxWidth()
                     .padding(horizontal = 24.dp, vertical = 18.dp)
             ) {
-                // Priority pip — left of checkbox for HIGH priority tasks
-                if (task.priority == TaskPriority.HIGH && !task.isCompleted && !isAmbientMode) {
-                    Box(
-                        modifier = Modifier
-                            .size(5.dp)
-                            .background(
-                                color = colors.accentPrimary.copy(alpha = 0.7f),
-                                shape = CircleShape
-                            )
-                    )
+                // Priority pip — left of checkbox for HIGH/MEDIUM priority tasks
+                if (task.priority != TaskPriority.NORMAL && !task.isCompleted && !isAmbientMode) {
+                    when (task.priority) {
+                        TaskPriority.HIGH -> Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .background(
+                                    color = colors.accentPrimary.copy(alpha = 0.7f),
+                                    shape = CircleShape
+                                )
+                        )
+                        TaskPriority.MEDIUM -> Box(
+                            modifier = Modifier
+                                .size(5.dp)
+                                .border(
+                                    width = 1.dp,
+                                    color = colors.accentPrimary.copy(alpha = 0.35f),
+                                    shape = CircleShape
+                                )
+                        )
+                        else -> {}
+                    }
                     Spacer(modifier = Modifier.width(6.dp))
                 }
 
@@ -409,7 +425,7 @@ private fun TaskItemContent(
                             text = task.cleanNotes,
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (isAmbientMode) LocalWallColors.current.ambientText.copy(alpha = 0.82f) else LocalWallColors.current.textSecondary.copy(alpha = 0.94f),
-                            maxLines = 1,
+                            maxLines = if (isSelected) 3 else 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -420,6 +436,16 @@ private fun TaskItemContent(
                             dueDate = task.dueDate,
                             isAmbientMode = isAmbientMode,
                             today = today
+                        )
+                    }
+
+                    // List name badge (shown in search/filter results)
+                    if (!listNameBadge.isNullOrBlank() && !isAmbientMode) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "\uD83D\uDCC1 $listNameBadge",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LocalWallColors.current.textMuted
                         )
                     }
                 }

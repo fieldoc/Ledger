@@ -27,7 +27,10 @@ import com.example.todowallapp.data.model.PromotionDraft
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskList
 import com.example.todowallapp.data.model.TaskListWithTasks
+import com.example.todowallapp.data.model.TaskFilter
 import com.example.todowallapp.data.model.TaskMetadata
+import com.example.todowallapp.data.model.TaskPriority
+import com.example.todowallapp.data.model.RecurrenceRule
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.data.repository.GoogleCalendarRepository
@@ -88,7 +91,13 @@ data class TaskWallUiState(
     val lastSyncSuccess: Boolean? = null,
     val calendarViewMode: CalendarViewMode = CalendarViewMode.MONTH,
     val eventsForRange: Map<LocalDate, List<CalendarEvent>> = emptyMap(),
-    val transientMessage: String? = null
+    val transientMessage: String? = null,
+    // Search & filter
+    val searchQuery: String? = null,
+    val activeFilters: Set<TaskFilter> = emptySet(),
+    val isSearchActive: Boolean = false,
+    // Reorder mode
+    val reorderModeTaskId: String? = null
 )
 
 enum class UndoAction { COMPLETE, DELETE }
@@ -1783,6 +1792,239 @@ class TaskWallViewModel(
             currentState = currentState,
             normalizedTaskLists = updatedLists
         )
+    }
+
+    // ─── Search & Filter ───
+
+    fun toggleFilter(filter: TaskFilter) {
+        _uiState.update { state ->
+            val newFilters = if (filter in state.activeFilters) {
+                state.activeFilters - filter
+            } else {
+                state.activeFilters + filter
+            }
+            state.copy(
+                activeFilters = newFilters,
+                isSearchActive = newFilters.isNotEmpty() || state.searchQuery != null
+            )
+        }
+    }
+
+    fun setSearchQuery(query: String) {
+        _uiState.update { it.copy(searchQuery = query, isSearchActive = true) }
+    }
+
+    fun clearSearch() {
+        _uiState.update { it.copy(searchQuery = null, activeFilters = emptySet(), isSearchActive = false) }
+    }
+
+    /**
+     * Returns tasks matching the current search query and/or filters,
+     * paired with their parent list name. Cross-list.
+     */
+    fun getFilteredTasks(): List<Pair<Task, String>> {
+        val state = _uiState.value
+        if (!state.isSearchActive) return emptyList()
+        val today = LocalDate.now()
+        val queryWords = state.searchQuery?.lowercase()?.split(" ")?.filter { it.isNotBlank() }
+
+        return state.allTaskLists.flatMap { listWithTasks ->
+            listWithTasks.tasks
+                .filter { task -> matchesFilters(task, state.activeFilters, today) }
+                .filter { task -> matchesQuery(task, queryWords) }
+                .filter { !it.isCompleted }
+                .map { task -> task to listWithTasks.taskList.title }
+        }.sortedWith(
+            compareBy<Pair<Task, String>> { (task, _) ->
+                if (task.priority == TaskPriority.HIGH) 0
+                else if (task.priority == TaskPriority.MEDIUM) 1
+                else 2
+            }.thenBy { (task, _) -> task.dueDate ?: LocalDate.MAX }
+        )
+    }
+
+    private fun matchesFilters(task: Task, filters: Set<TaskFilter>, today: LocalDate): Boolean {
+        if (filters.isEmpty()) return true
+        return filters.all { filter ->
+            when (filter) {
+                TaskFilter.OVERDUE -> task.getUrgencyLevel(today) == com.example.todowallapp.data.model.TaskUrgency.OVERDUE
+                TaskFilter.DUE_TODAY -> task.getUrgencyLevel(today) == com.example.todowallapp.data.model.TaskUrgency.DUE_TODAY
+                TaskFilter.DUE_THIS_WEEK -> task.dueDate != null && java.time.temporal.ChronoUnit.DAYS.between(today, task.dueDate) in 0..7
+                TaskFilter.HIGH_PRIORITY -> task.priority == TaskPriority.HIGH || task.priority == TaskPriority.MEDIUM
+                TaskFilter.RECURRING -> task.recurrenceRule != null
+            }
+        }
+    }
+
+    private fun matchesQuery(task: Task, queryWords: List<String>?): Boolean {
+        if (queryWords.isNullOrEmpty()) return true
+        val searchable = "${task.title} ${task.cleanNotes.orEmpty()}".lowercase()
+        return queryWords.any { word -> word in searchable }
+    }
+
+    // ─── Priority ───
+
+    fun setTaskPriority(task: Task, newPriority: TaskPriority) {
+        viewModelScope.launch {
+            val taskListId = findTaskListIdForTask(task.id) ?: return@launch
+
+            // Optimistic update
+            updateTaskAcrossLists(task.id) { it.copy(priority = newPriority) }
+
+            val encodedNotes = TaskMetadata.encode(
+                task.cleanNotes, task.recurrenceRule, newPriority
+            )
+            val result = tasksRepository.updateTaskNotes(taskListId, task.id, encodedNotes)
+            result.onFailure { error ->
+                // Revert
+                updateTaskAcrossLists(task.id) { it.copy(priority = task.priority) }
+                _uiState.update { it.copy(error = "Failed to update priority: ${error.message}") }
+            }
+        }
+    }
+
+    // ─── Reorder ───
+
+    fun enterReorderMode(taskId: String) {
+        _uiState.update { it.copy(reorderModeTaskId = taskId) }
+    }
+
+    fun cancelReorderMode() {
+        _uiState.update { it.copy(reorderModeTaskId = null) }
+    }
+
+    /**
+     * Swap the reordering task one position in the given direction within its list.
+     * Returns the new focus key if the swap happened.
+     */
+    fun moveReorder(direction: Int): Boolean {
+        val state = _uiState.value
+        val taskId = state.reorderModeTaskId ?: return false
+
+        val listWithTasks = state.allTaskLists.firstOrNull { lwt ->
+            lwt.tasks.any { it.id == taskId }
+        } ?: return false
+
+        val pendingTasks = listWithTasks.tasks.filter { !it.isCompleted }
+        val currentIndex = pendingTasks.indexOfFirst { it.id == taskId }
+        if (currentIndex < 0) return false
+
+        val targetIndex = currentIndex + direction
+        if (targetIndex < 0 || targetIndex >= pendingTasks.size) return false
+
+        // Swap locally
+        val mutableTasks = listWithTasks.tasks.toMutableList()
+        val fullCurrentIndex = mutableTasks.indexOfFirst { it.id == taskId }
+        val fullTargetIndex = mutableTasks.indexOfFirst { it.id == pendingTasks[targetIndex].id }
+        val temp = mutableTasks[fullCurrentIndex]
+        mutableTasks[fullCurrentIndex] = mutableTasks[fullTargetIndex]
+        mutableTasks[fullTargetIndex] = temp
+
+        val updatedLists = state.allTaskLists.map { lwt ->
+            if (lwt.taskList.id == listWithTasks.taskList.id) {
+                lwt.copy(tasks = mutableTasks)
+            } else lwt
+        }
+        _uiState.update { it.copy(allTaskLists = updatedLists) }
+        return true
+    }
+
+    fun confirmReorder() {
+        val state = _uiState.value
+        val taskId = state.reorderModeTaskId ?: return
+        _uiState.update { it.copy(reorderModeTaskId = null) }
+
+        viewModelScope.launch {
+            val taskListId = findTaskListIdForTask(taskId) ?: return@launch
+            val listWithTasks = state.allTaskLists.firstOrNull { lwt ->
+                lwt.tasks.any { it.id == taskId }
+            } ?: return@launch
+            val pendingTasks = listWithTasks.tasks.filter { !it.isCompleted }
+            val index = pendingTasks.indexOfFirst { it.id == taskId }
+            val previousTaskId = if (index > 0) pendingTasks[index - 1].id else null
+
+            val result = tasksRepository.moveTask(taskListId, taskId, previousTaskId)
+            result.onFailure {
+                _uiState.update { s -> s.copy(error = "Failed to save position: ${it.message}") }
+                performRefresh(showSyncIndicator = false)
+            }
+        }
+    }
+
+    fun pinTaskToTop(task: Task) {
+        viewModelScope.launch {
+            val taskListId = findTaskListIdForTask(task.id) ?: return@launch
+            val result = tasksRepository.moveTask(taskListId, task.id, null)
+            result.onSuccess { performRefresh(showSyncIndicator = false) }
+            result.onFailure {
+                _uiState.update { s -> s.copy(error = "Failed to pin task: ${it.message}") }
+            }
+        }
+    }
+
+    // ─── Recurrence management ───
+
+    fun setTaskRecurrence(task: Task, rule: RecurrenceRule) {
+        viewModelScope.launch {
+            val taskListId = findTaskListIdForTask(task.id) ?: return@launch
+
+            // Optimistic update
+            updateTaskAcrossLists(task.id) { it.copy(recurrenceRule = rule) }
+
+            val encodedNotes = TaskMetadata.encode(task.cleanNotes, rule, task.priority)
+            val result = tasksRepository.updateTaskNotes(taskListId, task.id, encodedNotes)
+            result.onFailure { error ->
+                updateTaskAcrossLists(task.id) { it.copy(recurrenceRule = task.recurrenceRule) }
+                _uiState.update { it.copy(error = "Failed to set recurrence: ${error.message}") }
+            }
+        }
+    }
+
+    fun removeTaskRecurrence(task: Task) {
+        viewModelScope.launch {
+            val taskListId = findTaskListIdForTask(task.id) ?: return@launch
+
+            updateTaskAcrossLists(task.id) { it.copy(recurrenceRule = null) }
+
+            val encodedNotes = TaskMetadata.encode(task.cleanNotes, null, task.priority)
+            val result = tasksRepository.updateTaskNotes(taskListId, task.id, encodedNotes)
+            result.onFailure { error ->
+                updateTaskAcrossLists(task.id) { it.copy(recurrenceRule = task.recurrenceRule) }
+                _uiState.update { it.copy(error = "Failed to remove recurrence: ${error.message}") }
+            }
+        }
+    }
+
+    fun skipRecurrence(task: Task) {
+        // Complete the task but suppress spawning the next instance
+        viewModelScope.launch {
+            val taskListId = findTaskListIdForTask(task.id) ?: return@launch
+
+            _undoState.value = UndoState(task = task, taskListId = taskListId)
+            undoTimeoutJob?.cancel()
+            undoTimeoutJob = viewModelScope.launch {
+                delay(UNDO_TIMEOUT_MS)
+                _undoState.value = null
+            }
+
+            val completedTask = task.copy(isCompleted = true, completedAt = LocalDateTime.now())
+            inFlightTaskIds.add(task.id)
+            updateTaskAcrossLists(task.id) { completedTask }
+
+            val result = tasksRepository.completeTask(taskListId, task.id)
+            result.onSuccess {
+                inFlightTaskIds.remove(task.id)
+                updateTaskAcrossLists(task.id) { it }
+                // Deliberately NOT calling spawnNextRecurrence
+            }
+            result.onFailure { error ->
+                inFlightTaskIds.remove(task.id)
+                updateTaskAcrossLists(task.id) { task }
+                _undoState.value = null
+                undoTimeoutJob?.cancel()
+                _uiState.update { it.copy(error = "Failed to skip occurrence: ${error.message}") }
+            }
+        }
     }
 
     override fun onCleared() {

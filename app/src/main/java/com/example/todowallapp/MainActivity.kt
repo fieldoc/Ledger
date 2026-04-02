@@ -539,6 +539,24 @@ private fun WallModeContent(
                         onSignOut = viewModel::signOut,
                         onSetBrightness = onSetBrightness,
                         transientMessage = uiState.transientMessage,
+                        // Search, filter, reorder, priority, recurrence
+                        isSearchActive = uiState.isSearchActive,
+                        searchQuery = uiState.searchQuery,
+                        activeFilters = uiState.activeFilters,
+                        filteredTasks = viewModel.getFilteredTasks(),
+                        reorderModeTaskId = uiState.reorderModeTaskId,
+                        onToggleFilter = viewModel::toggleFilter,
+                        onSetSearchQuery = viewModel::setSearchQuery,
+                        onClearSearch = viewModel::clearSearch,
+                        onSetPriority = viewModel::setTaskPriority,
+                        onEnterReorder = viewModel::enterReorderMode,
+                        onMoveReorder = viewModel::moveReorder,
+                        onConfirmReorder = viewModel::confirmReorder,
+                        onCancelReorder = viewModel::cancelReorderMode,
+                        onPinToTop = viewModel::pinTaskToTop,
+                        onSetRecurrence = viewModel::setTaskRecurrence,
+                        onRemoveRecurrence = viewModel::removeTaskRecurrence,
+                        onSkipRecurrence = viewModel::skipRecurrence,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
