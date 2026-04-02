@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.todowallapp.capture.model.ParsedCapture
 import com.example.todowallapp.data.model.BlockCategory
 import com.example.todowallapp.data.model.DayPlan
+import com.example.todowallapp.data.model.validated
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.model.RecurrenceFrequency
 import com.example.todowallapp.data.model.RecurrenceRule
@@ -609,7 +610,7 @@ Return the COMPLETE updated plan, not just the changed blocks.
             summary = summary,
             confidence = confidence,
             warning = warning
-        )
+        ).validated()
     }
 
     /**
@@ -1056,9 +1057,12 @@ USER'S CLARIFICATION:
         val root = JsonParser.parseString(rawJson).asJsonObject
 
         val intentStr = root.stringValue("intent") ?: "add"
-        val intent = runCatching {
+        val intent = try {
             VoiceIntent.valueOf(intentStr.uppercase())
-        }.getOrDefault(VoiceIntent.ADD)
+        } catch (e: IllegalArgumentException) {
+            Log.w(TAG, "Unknown voice intent '$intentStr', defaulting to ADD", e)
+            VoiceIntent.ADD
+        }
 
         val clarification = root.stringValue("clarification")
 
@@ -1078,9 +1082,12 @@ USER'S CLARIFICATION:
                 val newListName = obj.stringValue("newListName")
                 val parentTaskId = obj.stringValue("parentTaskId")
                     ?.takeIf { pId -> existingTasks.any { it.id == pId } }
-                val confidence = runCatching {
-                    obj.get("confidence")?.asFloat
-                }.getOrNull() ?: 0.5f
+                val confidence = try {
+                    obj.get("confidence")?.asFloat ?: 0.5f
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to parse confidence for task '$title', defaulting to 0.5", e)
+                    0.5f
+                }
                 val duplicateOf = obj.stringValue("duplicateOf")
                     ?.takeIf { dId -> existingTasks.any { it.id == dId } }
 
@@ -1097,7 +1104,12 @@ USER'S CLARIFICATION:
                 }.getOrNull()
 
                 val priority = obj.stringValue("priority")?.let { raw ->
-                    runCatching { TaskPriority.valueOf(raw.uppercase()) }.getOrNull()
+                    try {
+                        TaskPriority.valueOf(raw.uppercase())
+                    } catch (e: IllegalArgumentException) {
+                        Log.w(TAG, "Unknown priority '$raw' for task '$title', defaulting to NORMAL", e)
+                        null
+                    }
                 } ?: TaskPriority.NORMAL
 
                 val sharedParentName = obj.stringValue("sharedParentName")
