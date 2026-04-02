@@ -38,7 +38,8 @@ data class ParsedVoiceTaskItem(
     val confidence: Float,
     val duplicateOf: String?,
     val recurrenceRule: RecurrenceRule? = null,
-    val priority: TaskPriority = TaskPriority.NORMAL
+    val priority: TaskPriority = TaskPriority.NORMAL,
+    val sharedParentName: String? = null
 )
 
 data class ParsedVoiceResponse(
@@ -388,6 +389,12 @@ class GeminiCaptureRepository(
                - Each task gets its own entry in the tasks array with independent fields.
                - For non-add intents, there is typically only 1 task (the target of the action).
 
+               SUBTASK GROUPING: When the user says multiple tasks should be under the same parent
+               (e.g., "Add three subtasks to painting: buy paint, get brushes, lay tarp"), set
+               sharedParentName to the parent task name on ALL child tasks. If the parent already
+               exists in the task list, also set parentTaskId to its ID. If it doesn't exist,
+               leave parentTaskId null — the app will create it first, then wire the children.
+
             3) CONVERSATIONAL NOISE STRIPPING
                Extract the actionable intent and reduce to the shortest imperative phrase that fully captures the task. Speech is messy — strip aggressively:
                - "Uh so like I was thinking we should probably get around to painting the living room" → "Paint living room"
@@ -456,6 +463,7 @@ class GeminiCaptureRepository(
                      "targetListId": "string|null",
                      "newListName": "string|null",
                      "parentTaskId": "string|null",
+                     "sharedParentName": "string|null",
                      "confidence": 0.0,
                      "duplicateOf": "existing-task-id|null",
                      "recurrence": {
@@ -622,6 +630,8 @@ class GeminiCaptureRepository(
                     runCatching { TaskPriority.valueOf(raw.uppercase()) }.getOrNull()
                 } ?: TaskPriority.NORMAL
 
+                val sharedParentName = obj.stringValue("sharedParentName")
+
                 ParsedVoiceTaskItem(
                     title = title,
                     dueDate = dueDate,
@@ -632,7 +642,8 @@ class GeminiCaptureRepository(
                     confidence = confidence.coerceIn(0f, 1f),
                     duplicateOf = duplicateOf,
                     recurrenceRule = recurrenceRule,
-                    priority = priority
+                    priority = priority,
+                    sharedParentName = sharedParentName
                 )
             }
         } else {

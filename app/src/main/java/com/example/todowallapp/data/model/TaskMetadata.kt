@@ -122,6 +122,7 @@ private fun ordinal(n: Int): String {
 data class DecodedMetadata(
     val recurrenceRule: RecurrenceRule?,
     val priority: TaskPriority,
+    val preferredTime: String? = null,
     val cleanNotes: String?
 )
 
@@ -137,7 +138,12 @@ object TaskMetadata {
      * Returns empty string when all inputs are null/default.
      * Does NOT sanitize [notes] for embedded || sequences.
      */
-    fun encode(notes: String?, recurrence: RecurrenceRule?, priority: TaskPriority): String {
+    fun encode(
+        notes: String?,
+        recurrence: RecurrenceRule?,
+        priority: TaskPriority,
+        preferredTime: String? = null
+    ): String {
         val sb = StringBuilder()
         if (recurrence != null) {
             val anchorPart = recurrence.anchor ?: ""
@@ -145,6 +151,9 @@ object TaskMetadata {
         }
         if (priority == TaskPriority.HIGH) {
             sb.append("||PRIORITY:high||")
+        }
+        if (!preferredTime.isNullOrEmpty()) {
+            sb.append("||PREFERRED:${preferredTime.lowercase()}||")
         }
         if (!notes.isNullOrEmpty()) sb.append(notes)
         return sb.toString()
@@ -157,10 +166,11 @@ object TaskMetadata {
      * Malformed or unrecognized tag blocks are silently discarded.
      */
     fun decode(rawNotes: String?): DecodedMetadata {
-        if (rawNotes.isNullOrEmpty()) return DecodedMetadata(null, TaskPriority.NORMAL, null)
+        if (rawNotes.isNullOrEmpty()) return DecodedMetadata(null, TaskPriority.NORMAL, null, null)
 
         var recurrenceRule: RecurrenceRule? = null
         var priority = TaskPriority.NORMAL
+        var preferredTime: String? = null
 
         val cleanNotes = TAG_REGEX.replace(rawNotes) { match ->
             val content = match.groupValues[1]
@@ -186,6 +196,10 @@ object TaskMetadata {
                     }.getOrDefault(TaskPriority.NORMAL)
                     "" // strip tag from output
                 }
+                "PREFERRED" -> {
+                    preferredTime = parts.getOrNull(1)?.lowercase()
+                    "" // strip tag from output
+                }
                 else -> match.value // unrecognized tag: leave as-is
             }
         }.trimStart()
@@ -193,6 +207,7 @@ object TaskMetadata {
         return DecodedMetadata(
             recurrenceRule = recurrenceRule,
             priority = priority,
+            preferredTime = preferredTime,
             cleanNotes = cleanNotes.ifEmpty { null }
         )
     }

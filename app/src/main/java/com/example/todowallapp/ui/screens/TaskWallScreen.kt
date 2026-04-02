@@ -290,6 +290,7 @@ fun TaskWallScreen(
     onSignOut: () -> Unit = {},
     ambientLightMonitoringEnabled: Boolean = true,
     onSetBrightness: (Float) -> Unit = {},
+    transientMessage: String? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1368,6 +1369,35 @@ fun TaskWallScreen(
                         }
                     }
                     else -> {} // Idle handled by AnimatedVisibility
+                }
+            }
+        }
+
+        // Transient message toast — bottom-center
+        androidx.compose.animation.AnimatedVisibility(
+            visible = transientMessage != null,
+            enter = fadeIn(tween(200)) + slideInVertically(tween(200)) { it / 2 },
+            exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { it / 2 },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 80.dp)
+        ) {
+            transientMessage?.let { message ->
+                Box(
+                    modifier = Modifier
+                        .background(
+                            colors.surfaceCard.copy(alpha = 0.95f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                ) {
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.textPrimary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }

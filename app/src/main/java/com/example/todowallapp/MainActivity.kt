@@ -72,6 +72,7 @@ import com.example.todowallapp.ui.theme.LedgerTheme
 import com.example.todowallapp.viewmodel.PhoneCaptureViewModel
 import com.example.todowallapp.viewmodel.TaskWallViewModel
 import com.example.todowallapp.viewmodel.ThemeMode
+import com.example.todowallapp.viewmodel.UndoAction
 import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.delay
@@ -489,7 +490,12 @@ private fun WallModeContent(
                         lastSyncTime = uiState.lastSyncTime,
                         lastSyncSuccess = uiState.lastSyncSuccess,
                         undoVisible = undoState != null,
-                        undoMessage = undoState?.task?.title,
+                        undoMessage = undoState?.let { undo ->
+                            when (undo.action) {
+                                UndoAction.COMPLETE -> undo.task.title
+                                UndoAction.DELETE -> "Deleted: ${undo.task.title}"
+                            }
+                        },
                         onUndo = viewModel::undoCompletion,
                         onDismissUndo = viewModel::dismissUndo,
                         themeMode = themeMode,
@@ -532,6 +538,7 @@ private fun WallModeContent(
                         onSwitchMode = onSwitchMode,
                         onSignOut = viewModel::signOut,
                         onSetBrightness = onSetBrightness,
+                        transientMessage = uiState.transientMessage,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

@@ -91,9 +91,12 @@ data class TaskWallUiState(
     val transientMessage: String? = null
 )
 
+enum class UndoAction { COMPLETE, DELETE }
+
 data class UndoState(
     val task: Task,
-    val taskListId: String
+    val taskListId: String,
+    val action: UndoAction = UndoAction.COMPLETE
 )
 
 enum class ThemeMode {
@@ -666,7 +669,26 @@ class TaskWallViewModel(
         val undo = _undoState.value ?: return
         undoTimeoutJob?.cancel()
         _undoState.value = null
-        uncompleteTask(undo.task)
+        when (undo.action) {
+            UndoAction.COMPLETE -> uncompleteTask(undo.task)
+            UndoAction.DELETE -> {
+                // Re-create the deleted task
+                viewModelScope.launch {
+                    val encodedNotes = TaskMetadata.encode(
+                        undo.task.cleanNotes,
+                        undo.task.recurrenceRule,
+                        undo.task.priority
+                    )
+                    tasksRepository.createTask(
+                        taskListId = undo.taskListId,
+                        title = undo.task.title,
+                        dueDate = undo.task.dueDate,
+                        parentId = undo.task.parentId,
+                        notes = encodedNotes.ifEmpty { null }
+                    ).onSuccess { refresh() }
+                }
+            }
+        }
     }
 
     /**
@@ -774,6 +796,8 @@ class TaskWallViewModel(
                     var anyFailed = false
                     // Cache of newly created lists: newListName → created list ID
                     val createdListCache = mutableMapOf<String, String>()
+                    // Cache of created parent tasks: sharedParentName → created task ID
+                    val createdParentCache = mutableMapOf<String, String>()
 
                     for (task in response.tasks) {
                         if (task.title.isBlank()) continue
@@ -798,12 +822,46 @@ class TaskWallViewModel(
                             ?: defaultListId
                             ?: continue
 
-                        val encodedNotes = TaskMetadata.encode(null, task.recurrenceRule, task.priority)
+                        // Resolve parent ID: explicit parentTaskId, or sharedParentName grouping
+                        val resolvedParentId = task.parentTaskId
+                            ?: task.sharedParentName?.let { parentName ->
+                                createdParentCache[parentName] ?: run {
+                                    // Check if parent already exists in this list
+                                    val existingParent = _uiState.value.allTaskLists
+                                        .firstOrNull { it.taskList.id == listId }
+                                        ?.tasks
+                                        ?.firstOrNull { it.title.equals(parentName, ignoreCase = true) && !it.isCompleted }
+                                    if (existingParent != null) {
+                                        createdParentCache[parentName] = existingParent.id
+                                        existingParent.id
+                                    } else {
+                                        // Create the parent task first
+                                        tasksRepository.createTask(
+                                            taskListId = listId,
+                                            title = parentName
+                                        ).fold(
+                                            onSuccess = { created ->
+                                                createdParentCache[parentName] = created.id
+                                                created.id
+                                            },
+                                            onFailure = {
+                                                anyFailed = true
+                                                null
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                        val encodedNotes = TaskMetadata.encode(
+                            null, task.recurrenceRule, task.priority,
+                            task.preferredTime?.name
+                        )
                         val result = tasksRepository.createTask(
                             taskListId = listId,
                             title = task.title,
                             dueDate = task.dueDate,
-                            parentId = task.parentTaskId,
+                            parentId = resolvedParentId,
                             notes = encodedNotes.ifEmpty { null }
                         )
                         if (result.isFailure) anyFailed = true
@@ -821,10 +879,27 @@ class TaskWallViewModel(
                     val targetTask = response.tasks.firstOrNull() ?: return@launch
                     val targetId = targetTask.parentTaskId ?: return@launch
                     val targetListId = findTaskListId(targetId) ?: return@launch
+                    // Find the actual Task object for undo support
+                    val actualTask = _uiState.value.allTaskLists
+                        .flatMap { it.tasks }
+                        .firstOrNull { it.id == targetId }
                     tasksRepository.completeTask(targetListId, targetId).fold(
                         onSuccess = {
                             voiceParsingCoordinator.clearMetadata()
                             voiceCaptureManager.resetToIdle()
+                            // Set undo state like encoder completion does
+                            if (actualTask != null) {
+                                _undoState.value = UndoState(
+                                    task = actualTask,
+                                    taskListId = targetListId,
+                                    action = UndoAction.COMPLETE
+                                )
+                                undoTimeoutJob?.cancel()
+                                undoTimeoutJob = viewModelScope.launch {
+                                    delay(UNDO_TIMEOUT_MS)
+                                    _undoState.value = null
+                                }
+                            }
                             refresh()
                         },
                         onFailure = {
@@ -837,10 +912,27 @@ class TaskWallViewModel(
                     val targetTask = response.tasks.firstOrNull() ?: return@launch
                     val targetId = targetTask.parentTaskId ?: return@launch
                     val targetListId = findTaskListId(targetId) ?: return@launch
+                    // Find the actual Task object for undo support
+                    val actualTask = _uiState.value.allTaskLists
+                        .flatMap { it.tasks }
+                        .firstOrNull { it.id == targetId }
                     tasksRepository.deleteTask(targetListId, targetId).fold(
                         onSuccess = {
                             voiceParsingCoordinator.clearMetadata()
                             voiceCaptureManager.resetToIdle()
+                            // Set undo state so deletion can be reversed
+                            if (actualTask != null) {
+                                _undoState.value = UndoState(
+                                    task = actualTask,
+                                    taskListId = targetListId,
+                                    action = UndoAction.DELETE
+                                )
+                                undoTimeoutJob?.cancel()
+                                undoTimeoutJob = viewModelScope.launch {
+                                    delay(UNDO_TIMEOUT_MS)
+                                    _undoState.value = null
+                                }
+                            }
                             refresh()
                         },
                         onFailure = {
@@ -878,9 +970,27 @@ class TaskWallViewModel(
                 }
 
                 VoiceIntent.QUERY -> {
-                    // Query intent: preview shows matching tasks, no action needed
                     voiceParsingCoordinator.clearMetadata()
                     voiceCaptureManager.resetToIdle()
+                    // Build a summary of pending tasks for the user
+                    val allPending = _uiState.value.allTaskLists
+                        .flatMap { it.tasks }
+                        .filter { !it.isCompleted }
+                    val today = LocalDate.now()
+                    val overdue = allPending.count { it.getUrgencyLevel(today) == com.example.todowallapp.data.model.TaskUrgency.OVERDUE }
+                    val dueToday = allPending.count { it.getUrgencyLevel(today) == com.example.todowallapp.data.model.TaskUrgency.DUE_TODAY }
+                    val nextDue = allPending
+                        .filter { it.dueDate != null }
+                        .minByOrNull { it.dueDate!! }
+                    val summary = buildString {
+                        append("${allPending.size} pending task${if (allPending.size != 1) "s" else ""}")
+                        if (overdue > 0) append(" \u00B7 $overdue overdue")
+                        if (dueToday > 0) append(" \u00B7 $dueToday due today")
+                        if (nextDue != null) {
+                            append(" \u00B7 Next: ${nextDue.title}")
+                        }
+                    }
+                    setTransientMessage(summary)
                 }
 
                 VoiceIntent.AMEND -> {
@@ -894,11 +1004,16 @@ class TaskWallViewModel(
                             }
                             ?: defaultListId
                             ?: return@launch
+                        val encodedNotes = TaskMetadata.encode(
+                            null, task.recurrenceRule, task.priority,
+                            task.preferredTime?.name
+                        )
                         tasksRepository.createTask(
                             taskListId = listId,
                             title = task.title,
                             dueDate = task.dueDate,
-                            parentId = task.parentTaskId
+                            parentId = task.parentTaskId,
+                            notes = encodedNotes.ifEmpty { null }
                         ).fold(
                             onSuccess = {
                                 voiceParsingCoordinator.clearMetadata()
