@@ -290,7 +290,8 @@ class GoogleTasksRepository(
             completedAt = if (status == "completed") parseDateTime(completed) else null,
             recurrenceRule = decoded.recurrenceRule,
             priority = decoded.priority,
-            cleanNotes = decoded.cleanNotes
+            cleanNotes = decoded.cleanNotes,
+            preferredTime = decoded.preferredTime
         )
     }
 

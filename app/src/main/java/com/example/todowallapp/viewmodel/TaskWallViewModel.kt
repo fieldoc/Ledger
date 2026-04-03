@@ -783,6 +783,10 @@ class TaskWallViewModel(
     }
 
     fun startVoiceInput() {
+        if (!isOnline.value) {
+            setTransientMessage("No internet connection — voice input requires network access.")
+            return
+        }
         voiceParsingCoordinator.cancelParse()
         voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.startListening()
@@ -1147,6 +1151,11 @@ class TaskWallViewModel(
     fun startDayOrganizer() {
         if (dayOrganizerCoordinator.state.value !is DayOrganizerState.Idle) return
 
+        if (!isOnline.value) {
+            setTransientMessage("No internet connection — day planner requires network access.")
+            return
+        }
+
         dayOrganizerCoordinator.startListening(
             scope = viewModelScope,
             listProvider = {
@@ -1156,8 +1165,17 @@ class TaskWallViewModel(
             },
             taskProvider = {
                 _uiState.value.allTaskLists.flatMap { list ->
-                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
-                        ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
+                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map { task ->
+                        ExistingTaskRef(
+                            id = task.id,
+                            title = task.title,
+                            listId = list.taskList.id,
+                            listTitle = list.taskList.title,
+                            dueDate = task.dueDate,
+                            priority = task.priority,
+                            preferredTime = task.preferredTime,
+                            recurrenceInfo = task.recurrenceRule?.toHumanReadable()
+                        )
                     }
                 }.take(40)
             },
@@ -1168,12 +1186,30 @@ class TaskWallViewModel(
                 ).getOrElse { emptyMap() }
 
                 events[today]?.map { event ->
-                    val timeRange = if (event.isAllDay) "All day"
-                    else "${event.startDateTime?.toLocalTime()?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}-${event.endDateTime?.toLocalTime()?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}"
-                    "$timeRange ${event.title}"
+                    if (event.isAllDay) {
+                        "All day ${event.title} (all-day)"
+                    } else {
+                        val start = event.startDateTime?.toLocalTime()
+                        val end = event.endDateTime?.toLocalTime()
+                        val timeRange = "${start?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}-${end?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}"
+                        val durationMin = if (start != null && end != null) {
+                            java.time.Duration.between(start, end).toMinutes()
+                        } else null
+                        val durationSuffix = durationMin?.let { " (${it}min)" } ?: ""
+                        "$timeRange ${event.title}$durationSuffix"
+                    }
                 } ?: emptyList()
             },
-            selectedCalendarId = _uiState.value.selectedCalendarId
+            selectedCalendarId = _uiState.value.selectedCalendarId,
+            weatherProvider = {
+                val todayWeather = _weatherForecast.value[java.time.LocalDate.now()]
+                todayWeather?.name // text-only — no emoji to avoid leaking into Gemini titles
+            },
+            wakeHour = _sleepEndHour.value,   // sleep-end = wake-up time
+            sleepHour = _sleepStartHour.value, // sleep-start = bedtime
+            focusedListTitle = _uiState.value.selectedTaskListTitle.takeIf {
+                _uiState.value.selectedTaskListId != null
+            }
         )
     }
 

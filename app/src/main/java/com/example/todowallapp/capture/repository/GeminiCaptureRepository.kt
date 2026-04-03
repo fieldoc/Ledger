@@ -54,7 +54,12 @@ data class ParsedVoiceResponse(
 data class ExistingTaskRef(
     val id: String,
     val title: String,
-    val listId: String
+    val listId: String,
+    val listTitle: String? = null,
+    val dueDate: LocalDate? = null,
+    val priority: TaskPriority = TaskPriority.NORMAL,
+    val preferredTime: String? = null,
+    val recurrenceInfo: String? = null
 )
 
 /**
@@ -445,13 +450,34 @@ class GeminiCaptureRepository(
         existingEvents: List<String>,
         existingTasks: List<ExistingTaskRef>,
         targetDate: LocalDate,
-        currentTime: LocalTime
+        currentTime: LocalTime,
+        weatherForecast: String? = null,
+        wakeHour: Int = 7,
+        sleepHour: Int = 23,
+        focusedListTitle: String? = null
     ): GeminiPrompt {
+        val wakeTime = String.format("%02d:00", wakeHour)
+        val sleepTime = String.format("%02d:00", sleepHour)
+        val noonHour = maxOf(wakeHour + 1, 12) // ensure noon is after wake
+
         val timeContext = if (targetDate == LocalDate.now()) {
             "Start scheduling from ${currentTime.format(DateTimeFormatter.ofPattern("HH:mm"))} (round to next half-hour)."
         } else {
-            "Start scheduling from 07:00 (morning)."
+            "Start scheduling from $wakeTime (morning)."
         }
+
+        val dayOfWeek = targetDate.dayOfWeek
+        val isWeekend = dayOfWeek == java.time.DayOfWeek.SATURDAY || dayOfWeek == java.time.DayOfWeek.SUNDAY
+        val dayTypeLabel = if (isWeekend) "WEEKEND" else "WEEKDAY"
+
+        val weatherRule = if (!weatherForecast.isNullOrEmpty()) """
+11. Weather-aware scheduling: today's forecast is $weatherForecast. If weather is bad (RAIN, SNOW, STORM), prefer indoor tasks and avoid outdoor errands. If clear, outdoor errands and exercise are fine."""
+        else ""
+
+        val weekendRule = if (isWeekend) """
+${if (weatherRule.isNotEmpty()) "12" else "11"}. Weekend scheduling: be more relaxed — larger leisure blocks are normal. Don't assume work obligations unless the user mentions them."""
+        else """
+${if (weatherRule.isNotEmpty()) "12" else "11"}. Weekday scheduling: assume the user may have work obligations. Schedule personal tasks around work hours unless told otherwise."""
 
         val systemInstruction = """
 You are a day planning assistant. The user described what they want to accomplish today.
@@ -460,14 +486,14 @@ Produce a time-blocked schedule as a JSON object.
 RULES:
 1. NEVER move or modify existing calendar events. Include them in the output with isExistingEvent=true.
 2. Categorize each NEW block: ACTIVE (cognitively demanding), PASSIVE (low-attention, may need proximity), ERRAND (location-based), SOCIAL (calls, meetings), LEISURE (reading, relaxation).
-3. Energy curve: schedule ACTIVE tasks in the morning (before noon), PASSIVE/LEISURE in the evening. ERRAND blocks should cluster together to minimize travel.
+3. Energy curve: schedule ACTIVE tasks during peak hours ($wakeTime–${String.format("%02d:00", noonHour)}), PASSIVE/LEISURE in the evening (after 17:00). ERRAND blocks should cluster together to minimize travel. Available hours: $wakeTime–$sleepTime.
 4. For PASSIVE tasks with follow-up (e.g., laundry needs changeover), add a notes field and schedule a brief follow-up block at the appropriate time.
 5. Estimate durations reasonably. If the user provided durations, use them. Common defaults: dog walk 30min, run 30-45min, bank 30min, grocery 45min, phone call 20-30min.
-6. If the user mentioned an existing Google Task by name (fuzzy match), set sourceTaskId to the task ID and sourceTaskListId to the list ID. Otherwise leave null.
+6. If the user mentioned an existing Google Task by name (fuzzy match), set sourceTaskId to the task ID and sourceTaskListId to the list ID. Otherwise leave null. Respect task metadata: HIGH priority tasks should be scheduled earlier; tasks with a preferred time (morning/afternoon/evening) should be placed accordingly.
 7. Leave at least 15 minutes buffer between blocks that require location changes.
 8. Return confidence 0.0-1.0 for the overall plan. If confidence < 0.5, add a "warning" field explaining uncertainty.
 9. The summary should be concise: "N blocks, M new — key insight" (e.g., "8 blocks, 6 new — errands clustered at 1pm").
-10. Do NOT use emoji in titles. Plain text only.
+10. Do NOT use emoji in titles. Plain text only.$weatherRule$weekendRule
 
 RESPONSE FORMAT (strict JSON):
 {
@@ -495,10 +521,29 @@ RESPONSE FORMAT (strict JSON):
         else existingEvents.joinToString("\n") { "- $it" }
 
         val tasksBlock = if (existingTasks.isEmpty()) "No existing tasks."
-        else existingTasks.take(40).joinToString("\n") { "- ${it.title} (list: ${it.listId})" }
+        else existingTasks.take(40).joinToString("\n") { ref ->
+            val parts = mutableListOf(ref.title)
+            parts.add("list: ${ref.listTitle ?: ref.listId}")
+            ref.dueDate?.let { parts.add("due: $it") }
+            if (ref.priority != TaskPriority.NORMAL) parts.add("priority: ${ref.priority.name}")
+            ref.preferredTime?.let { parts.add("preferred: $it") }
+            ref.recurrenceInfo?.let { parts.add("recurs: $it") }
+            "- ${parts.first()} (${parts.drop(1).joinToString(", ")})"
+        }
+
+        val weatherSection = if (!weatherForecast.isNullOrEmpty()) """
+
+WEATHER FORECAST:
+$weatherForecast
+""" else ""
+
+        val focusedListSection = if (!focusedListTitle.isNullOrEmpty()) """
+
+USER'S FOCUSED LIST: "$focusedListTitle" — prioritize tasks from this list when scheduling.
+""" else ""
 
         val userContent = """
-TARGET DATE: $targetDate
+TARGET DATE: $targetDate ($dayTypeLabel — ${dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }})
 CURRENT TIME: ${currentTime.format(DateTimeFormatter.ofPattern("HH:mm"))}
 $timeContext
 
@@ -506,8 +551,7 @@ EXISTING CALENDAR EVENTS (DO NOT move or modify these — schedule around them):
 $eventsBlock
 
 EXISTING GOOGLE TASKS (for reference — match by name if the user mentions one):
-$tasksBlock
-
+$tasksBlock$weatherSection$focusedListSection
 USER'S REQUEST:
 "$rawTranscription"
 """.trimIndent()

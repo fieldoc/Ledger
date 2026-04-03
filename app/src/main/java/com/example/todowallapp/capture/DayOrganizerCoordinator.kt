@@ -69,7 +69,11 @@ class DayOrganizerCoordinator(
     private var listProvider: (() -> List<ExistingListRef>)? = null
     private var taskProvider: (() -> List<ExistingTaskRef>)? = null
     private var eventsProvider: (suspend () -> List<String>)? = null
+    private var weatherProvider: (suspend () -> String?)? = null
     private var selectedCalendarId: String = GoogleCalendarRepository.PRIMARY_CALENDAR_ID
+    private var wakeHour: Int = 7
+    private var sleepHour: Int = 23
+    private var focusedListTitle: String? = null
 
     // ---------------------------------------------------------------------------
     // Public API
@@ -80,13 +84,21 @@ class DayOrganizerCoordinator(
         listProvider: () -> List<ExistingListRef>,
         taskProvider: () -> List<ExistingTaskRef>,
         eventsProvider: suspend () -> List<String>,
-        selectedCalendarId: String = GoogleCalendarRepository.PRIMARY_CALENDAR_ID
+        selectedCalendarId: String = GoogleCalendarRepository.PRIMARY_CALENDAR_ID,
+        weatherProvider: (suspend () -> String?)? = null,
+        wakeHour: Int = 7,
+        sleepHour: Int = 23,
+        focusedListTitle: String? = null
     ) {
         this.scope = scope
         this.listProvider = listProvider
         this.taskProvider = taskProvider
         this.eventsProvider = eventsProvider
         this.selectedCalendarId = selectedCalendarId
+        this.weatherProvider = weatherProvider
+        this.wakeHour = wakeHour
+        this.sleepHour = sleepHour
+        this.focusedListTitle = focusedListTitle
 
         voiceCaptureManager.rawResultCallback = { rawText ->
             handleTranscription(rawText)
@@ -163,6 +175,15 @@ class DayOrganizerCoordinator(
         conversationTurns.clear()
         planSystemInstruction = null
         planGenerationConfig = null
+        // Reset all provider/config state set by startListening()
+        scope = null
+        listProvider = null
+        taskProvider = null
+        eventsProvider = null
+        weatherProvider = null
+        focusedListTitle = null
+        wakeHour = 7
+        sleepHour = 23
         _state.value = DayOrganizerState.Idle
     }
 
@@ -208,6 +229,7 @@ class DayOrganizerCoordinator(
 
                 val events = eventsProvider?.invoke() ?: emptyList()
                 val tasks = taskProvider?.invoke() ?: emptyList()
+                val weather = weatherProvider?.invoke()
                 val targetDate = LocalDate.now()
 
                 val prompt: GeminiPrompt = geminiCaptureRepository.buildDayPlanGeminiPrompt(
@@ -215,7 +237,11 @@ class DayOrganizerCoordinator(
                     existingEvents = events,
                     existingTasks = tasks,
                     targetDate = targetDate,
-                    currentTime = LocalTime.now()
+                    currentTime = LocalTime.now(),
+                    weatherForecast = weather,
+                    wakeHour = wakeHour,
+                    sleepHour = sleepHour,
+                    focusedListTitle = focusedListTitle
                 )
 
                 // Cache system instruction & generation config for multi-turn adjustments

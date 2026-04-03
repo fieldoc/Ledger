@@ -21,7 +21,9 @@ data class Task(
     /** Priority decoded from notes-field metadata tag. */
     val priority: TaskPriority = TaskPriority.NORMAL,
     /** User-visible notes with ||...|| metadata tags stripped. */
-    val cleanNotes: String? = null
+    val cleanNotes: String? = null,
+    /** Preferred time-of-day decoded from ||PREFERRED:morning|| metadata tag. */
+    val preferredTime: String? = null
 ) {
     /**
      * Determines the urgency level of the task based on due date
