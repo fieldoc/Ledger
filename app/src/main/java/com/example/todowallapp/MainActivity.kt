@@ -397,6 +397,7 @@ private fun WallModeContent(
     val isValidatingGeminiKey by viewModel.isValidatingGeminiKey.collectAsState()
     val geminiKeyError by viewModel.geminiKeyError.collectAsState()
     val dayOrganizerState by viewModel.dayOrganizerState.collectAsState()
+    val hasSeenPlanDayHint by viewModel.hasSeenPlanDayHint.collectAsState()
     var weatherApiKeyPresent by remember { mutableStateOf(weatherKeyStore.hasApiKey()) }
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
@@ -537,6 +538,14 @@ private fun WallModeContent(
                         },
                         onSwitchMode = onSwitchMode,
                         onSignOut = viewModel::signOut,
+                        onPlanDay = {
+                            scope.launch {
+                                pagerState.animateScrollToPage(1)
+                                viewModel.setCalendarViewMode(com.example.todowallapp.data.model.CalendarViewMode.DAY)
+                                viewModel.startDayOrganizer()
+                            }
+                        },
+                        hasCalendarScope = uiState.hasCalendarScope,
                         onSetBrightness = onSetBrightness,
                         transientMessage = uiState.transientMessage,
                         // Search, filter, reorder, priority, recurrence
@@ -637,6 +646,7 @@ private fun WallModeContent(
                         },
                         onSwitchMode = onSwitchMode,
                         onSignOut = viewModel::signOut,
+                        onPlanDay = { viewModel.startDayOrganizer() },
                         onRefresh = viewModel::refresh,
                         onDismissCalendarError = viewModel::clearCalendarError,
                         dayOrganizerState = dayOrganizerState,
@@ -648,6 +658,8 @@ private fun WallModeContent(
                         onRetryDayOrganizer = { viewModel.retryDayOrganizer() },
                         onDayOrganizerFocusChange = { index -> viewModel.setDayOrganizerFocus(index) },
                         voiceStateIdle = voiceState is VoiceInputState.Idle,
+                        hasSeenPlanDayHint = hasSeenPlanDayHint,
+                        onDismissPlanDayHint = viewModel::dismissPlanDayHint,
                         modifier = Modifier.fillMaxSize()
                     )
                 }

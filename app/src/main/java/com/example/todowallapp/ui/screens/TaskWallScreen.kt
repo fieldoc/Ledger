@@ -296,6 +296,8 @@ fun TaskWallScreen(
     onSearchCities: (suspend (String) -> List<String>) = { emptyList() },
     onSwitchMode: () -> Unit = {},
     onSignOut: () -> Unit = {},
+    onPlanDay: () -> Unit = {},
+    hasCalendarScope: Boolean = false,
     ambientLightMonitoringEnabled: Boolean = true,
     onSetBrightness: (Float) -> Unit = {},
     transientMessage: String? = null,
@@ -391,6 +393,9 @@ fun TaskWallScreen(
                     add(TaskContextMenuAction(id = "edit_recurrence", label = "Edit Recurrence"))
                     add(TaskContextMenuAction(id = "skip_recurrence", label = "Skip This Time"))
                     add(TaskContextMenuAction(id = "remove_recurrence", label = "Remove Recurrence"))
+                }
+                if (geminiKeyPresent) {
+                    add(TaskContextMenuAction(id = "voice", label = "Add by Voice"))
                 }
                 add(TaskContextMenuAction(id = "schedule", label = "Schedule Task"))
                 add(TaskContextMenuAction(id = "delete", label = "Delete Task", isDestructive = true))
@@ -906,6 +911,7 @@ fun TaskWallScreen(
                                                 }
                                                 "skip_recurrence" -> onSkipRecurrence(task)
                                                 "remove_recurrence" -> onRemoveRecurrence(task)
+                                                "voice" -> startVoiceWithPermission()
                                                 "schedule" -> onScheduleTask(task)
                                                 "restore" -> onTaskToggle(task)
                                                 "delete" -> onTaskDelete(task)
@@ -1239,7 +1245,9 @@ fun TaskWallScreen(
                 onSearchCities = onSearchCities,
                 onSwitchMode = onSwitchMode,
                 onSignOut = onSignOut,
-                onDismiss = { showSettings = false }
+                onDismiss = { showSettings = false },
+                onPlanDay = onPlanDay,
+                hasCalendarScope = hasCalendarScope
             )
         }
 
@@ -1271,6 +1279,7 @@ fun TaskWallScreen(
                     }
                     "skip_recurrence" -> onSkipRecurrence(task)
                     "remove_recurrence" -> onRemoveRecurrence(task)
+                    "voice" -> startVoiceWithPermission()
                     "schedule" -> onScheduleTask(task)
                     "restore" -> onTaskToggle(task)
                     "delete" -> onTaskDelete(task)

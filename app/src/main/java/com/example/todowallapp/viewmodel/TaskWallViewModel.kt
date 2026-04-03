@@ -3,6 +3,7 @@ package com.example.todowallapp.viewmodel
 import android.content.Context
 import android.util.Log
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
@@ -160,6 +161,10 @@ class TaskWallViewModel(
     private val _lightEndHour = MutableStateFlow(19)
     val lightEndHour: StateFlow<Int> = _lightEndHour.asStateFlow()
 
+    // Plan Day hint
+    private val _hasSeenPlanDayHint = MutableStateFlow(true) // default true, DataStore overrides to false if unseen
+    val hasSeenPlanDayHint: StateFlow<Boolean> = _hasSeenPlanDayHint.asStateFlow()
+
     // Gemini key state (for wall-mode settings)
     private val _geminiKeyPresent = MutableStateFlow(geminiKeyStore.hasApiKey())
     val geminiKeyPresent: StateFlow<Boolean> = _geminiKeyPresent.asStateFlow()
@@ -183,6 +188,7 @@ class TaskWallViewModel(
     private val themeModeKey = stringPreferencesKey("theme_mode")
     private val lightStartHourKey = intPreferencesKey("light_start_hour")
     private val lightEndHourKey = intPreferencesKey("light_end_hour")
+    private val hasSeenPlanDayHintKey = booleanPreferencesKey("has_seen_plan_day_hint")
 
     companion object {
         private const val SILENT_SIGN_IN_TIMEOUT_MS = 3_000L
@@ -280,6 +286,7 @@ class TaskWallViewModel(
                 ?: ThemeMode.AUTO
             _lightStartHour.value = prefs[lightStartHourKey] ?: 8
             _lightEndHour.value = prefs[lightEndHourKey] ?: 19
+            _hasSeenPlanDayHint.value = prefs[hasSeenPlanDayHintKey] ?: false
 
             val selectedCalendarDate = prefs[selectedCalendarDateKey]
                 ?.let { savedDate -> parseLocalDate(savedDate) }
@@ -1592,6 +1599,15 @@ class TaskWallViewModel(
                 prefs[themeModeKey] = mode.name
                 prefs[lightStartHourKey] = lightStart
                 prefs[lightEndHourKey] = lightEnd
+            }
+        }
+    }
+
+    fun dismissPlanDayHint() {
+        _hasSeenPlanDayHint.value = true
+        viewModelScope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[hasSeenPlanDayHintKey] = true
             }
         }
     }

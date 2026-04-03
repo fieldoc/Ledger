@@ -19,7 +19,12 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -63,6 +68,7 @@ import java.util.Locale
 private val SYNC_INTERVAL_OPTIONS = listOf(1, 2, 5, 10, 15, 30)
 
 private enum class SettingsItemType {
+    PLAN_DAY,
     THEME_MODE,
     LIGHT_HOURS,
     SLEEP_SCHEDULE,
@@ -99,11 +105,16 @@ fun SettingsPanel(
     onSwitchMode: () -> Unit,
     onSignOut: () -> Unit,
     onDismiss: () -> Unit,
+    onPlanDay: () -> Unit = {},
+    hasCalendarScope: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
-    val items = remember(themeMode) {
+    val items = remember(themeMode, geminiKeyPresent, hasCalendarScope) {
         buildList {
+            if (geminiKeyPresent && hasCalendarScope) {
+                add(SettingsItemType.PLAN_DAY)
+            }
             add(SettingsItemType.THEME_MODE)
             if (themeMode == ThemeMode.AUTO) {
                 add(SettingsItemType.LIGHT_HOURS)
@@ -156,6 +167,7 @@ fun SettingsPanel(
 
     val focusedItem = items.getOrElse(focusedIndex) { SettingsItemType.THEME_MODE }
     val focusedItemDescription = when (focusedItem) {
+        SettingsItemType.PLAN_DAY -> "Plan my day selected"
         SettingsItemType.THEME_MODE -> "Theme mode selected"
         SettingsItemType.LIGHT_HOURS -> {
             val activeField = if (lightHourFieldFocus == 0) "start time" else "end time"
@@ -279,6 +291,11 @@ fun SettingsPanel(
 
                     Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
                         when (focusedItem) {
+                            SettingsItemType.PLAN_DAY -> {
+                                onPlanDay()
+                                onDismiss()
+                            }
+
                             SettingsItemType.THEME_MODE -> {
                                 onThemeSettingsChange(cycleThemeMode(forward = true), lightStartHour, lightEndHour)
                             }
@@ -347,6 +364,33 @@ fun SettingsPanel(
             )
 
             Spacer(modifier = Modifier.height(20.dp))
+
+            if (geminiKeyPresent && hasCalendarScope) {
+                val planDayFocused = focusedItem == SettingsItemType.PLAN_DAY
+                val planDayColor = if (planDayFocused) colors.accentPrimary else colors.textPrimary
+
+                SettingsItem(
+                    label = "Plan My Day",
+                    isSelected = planDayFocused,
+                    labelColor = planDayColor,
+                    onClick = {
+                        focusedIndex = items.indexOf(SettingsItemType.PLAN_DAY).coerceAtLeast(0)
+                        onPlanDay()
+                        onDismiss()
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Mic,
+                        contentDescription = null,
+                        tint = planDayColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                SettingsDivider()
+
+                Spacer(modifier = Modifier.height(4.dp))
+            }
 
             SettingsSectionHeader("APPEARANCE")
 

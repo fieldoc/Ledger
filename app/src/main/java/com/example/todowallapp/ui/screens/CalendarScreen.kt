@@ -16,6 +16,8 @@ import com.example.todowallapp.ui.theme.LocalWallColors
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import kotlinx.coroutines.delay
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -155,6 +157,7 @@ fun CalendarScreen(
     onDismissCalendarError: () -> Unit = {},
     onSwitchMode: () -> Unit = {},
     onSignOut: () -> Unit = {},
+    onPlanDay: () -> Unit = {},
     onRefresh: (() -> Unit)? = null,
     // Day Organizer
     dayOrganizerState: DayOrganizerState = DayOrganizerState.Idle,
@@ -166,6 +169,8 @@ fun CalendarScreen(
     onRetryDayOrganizer: () -> Unit = {},
     onDayOrganizerFocusChange: (Int) -> Unit = {},
     voiceStateIdle: Boolean = true,
+    hasSeenPlanDayHint: Boolean = true,
+    onDismissPlanDayHint: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -176,8 +181,9 @@ fun CalendarScreen(
         if (granted) onStartDayOrganizer()
     }
 
-    val startDayOrganizerWithPermission = remember(onStartDayOrganizer) {
+    val startDayOrganizerWithPermission = remember(onStartDayOrganizer, onDismissPlanDayHint) {
         {
+            onDismissPlanDayHint()
             when (PackageManager.PERMISSION_GRANTED) {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) -> {
                     onStartDayOrganizer()
@@ -204,6 +210,7 @@ fun CalendarScreen(
     var selectedEventId by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
     var isSettingsFocused by remember { mutableStateOf(false) }
+    var isPlanDayFocused by remember { mutableStateOf(false) }
     var isViewSwitcherFocused by remember { mutableStateOf(false) }
     var isDateBarFocused by remember { mutableStateOf(false) }
     var isEditingDate by remember { mutableStateOf(false) }
@@ -269,6 +276,9 @@ fun CalendarScreen(
             .onKeyEvent { keyEvent ->
                 if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
 
+                // Dismiss first-use hint on any encoder input
+                if (!hasSeenPlanDayHint) onDismissPlanDayHint()
+
                 // Day Organizer active — consume all encoder input
                 val orgState = dayOrganizerState
                 if (orgState !is DayOrganizerState.Idle) {
@@ -315,7 +325,11 @@ fun CalendarScreen(
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionRight, Key.DirectionDown -> {
                             isSettingsFocused = false
-                            isViewSwitcherFocused = true
+                            // Skip Plan Day button if not visible
+                            val planDayVisible = geminiKeyPresent && voiceStateIdle &&
+                                dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope
+                            if (planDayVisible) isPlanDayFocused = true
+                            else isViewSwitcherFocused = true
                             true
                         }
                         Key.DirectionLeft, Key.DirectionUp -> {
@@ -340,12 +354,36 @@ fun CalendarScreen(
                     }
                 }
 
+                // Header focus: Plan Day button
+                if (isPlanDayFocused) {
+                    return@onKeyEvent when (keyEvent.key) {
+                        Key.DirectionLeft, Key.DirectionUp -> {
+                            isPlanDayFocused = false
+                            isSettingsFocused = true
+                            true
+                        }
+                        Key.DirectionRight, Key.DirectionDown -> {
+                            isPlanDayFocused = false
+                            isViewSwitcherFocused = true
+                            true
+                        }
+                        Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
+                            startDayOrganizerWithPermission()
+                            true
+                        }
+                        else -> true
+                    }
+                }
+
                 // Header focus: view switcher
                 if (isViewSwitcherFocused) {
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionLeft, Key.DirectionUp -> {
                             isViewSwitcherFocused = false
-                            isSettingsFocused = true
+                            val planDayVisible = geminiKeyPresent && voiceStateIdle &&
+                                dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope
+                            if (planDayVisible) isPlanDayFocused = true
+                            else isSettingsFocused = true
                             true
                         }
                         Key.DirectionRight, Key.DirectionDown -> {
@@ -751,6 +789,13 @@ fun CalendarScreen(
                     isFocused = isSettingsFocused,
                     onClick = { showSettings = true }
                 )
+                if (geminiKeyPresent && voiceStateIdle &&
+                    dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope) {
+                    PlanDayButton(
+                        isFocused = isPlanDayFocused,
+                        onClick = startDayOrganizerWithPermission
+                    )
+                }
                 ViewSwitcherPill(
                     options = listOf(
                         ViewSwitcherOption(key = "tasks", label = "Tasks"),
@@ -770,6 +815,34 @@ fun CalendarScreen(
                         Modifier
                     }
                 )
+            }
+
+            // First-use discovery hint for Plan Day button
+            val planDayVisible = geminiKeyPresent && voiceStateIdle &&
+                dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope
+            if (planDayVisible && !hasSeenPlanDayHint) {
+                var hintVisible by remember { mutableStateOf(true) }
+                val hintAlpha by animateFloatAsState(
+                    targetValue = if (hintVisible) 0.5f else 0f,
+                    animationSpec = tween(600),
+                    label = "hintAlpha"
+                )
+                LaunchedEffect(Unit) {
+                    delay(8000)
+                    hintVisible = false
+                    delay(600) // wait for fade out
+                    onDismissPlanDayHint()
+                }
+                if (hintAlpha > 0f) {
+                    Text(
+                        text = "Navigate here & click to plan your day",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LocalWallColors.current.textMuted.copy(alpha = hintAlpha),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(end = 8.dp, top = 4.dp)
+                    )
+                }
             }
         }
 
@@ -956,6 +1029,8 @@ fun CalendarScreen(
                             isWeatherExpanded = isWeatherExpanded,
                             onToggleWeatherExpanded = { isWeatherExpanded = !isWeatherExpanded },
                             isWeatherFocused = isWeatherFocused,
+                            geminiKeyPresent = geminiKeyPresent,
+                            dayOrganizerIdle = dayOrganizerState is DayOrganizerState.Idle,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -1069,7 +1144,11 @@ fun CalendarScreen(
                 onSearchCities = onSearchCities,
                 onSwitchMode = onSwitchMode,
                 onSignOut = onSignOut,
-                onDismiss = { showSettings = false }
+                onDismiss = { showSettings = false },
+                onPlanDay = {
+                    startDayOrganizerWithPermission()
+                },
+                hasCalendarScope = hasCalendarScope
             )
         }
 
@@ -1257,6 +1336,36 @@ private fun CalendarSettingsButton(isFocused: Boolean, onClick: () -> Unit) {
         Icon(
             imageVector = Icons.Outlined.Settings,
             contentDescription = "Settings",
+            tint = if (isFocused) colors.accentPrimary else colors.textSecondary,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
+
+@Composable
+private fun PlanDayButton(isFocused: Boolean, onClick: () -> Unit) {
+    val colors = LocalWallColors.current
+    val shape = RoundedCornerShape(16.dp)
+    val interactionSource = remember { MutableInteractionSource() }
+
+    val backgroundColor by animateColorAsState(
+        targetValue = if (isFocused) colors.surfaceCard.copy(alpha = 0.6f) else colors.surfaceCard.copy(alpha = 0.2f),
+        animationSpec = tween(WallAnimations.SHORT),
+        label = "planDayBg"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(shape)
+            .background(backgroundColor)
+            .border(1.dp, if (isFocused) colors.accentPrimary.copy(alpha = 0.5f) else colors.rimGloss, shape)
+            .clickable(onClick = onClick, interactionSource = interactionSource, indication = null),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Mic,
+            contentDescription = "Plan your day",
             tint = if (isFocused) colors.accentPrimary else colors.textSecondary,
             modifier = Modifier.size(24.dp)
         )

@@ -29,6 +29,9 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -258,6 +261,8 @@ fun CalendarDayView(
     onToggleWeatherExpanded: () -> Unit = {},
     isWeatherExpanded: Boolean = false,
     isWeatherFocused: Boolean = false,
+    geminiKeyPresent: Boolean = false,
+    dayOrganizerIdle: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val dims = rememberLayoutDimensions()
@@ -278,6 +283,14 @@ fun CalendarDayView(
     }
 
     var expandedRangeStarts by remember(date) { mutableStateOf(setOf<LocalDateTime>()) }
+
+    // Determine the first empty morning slot (7:00-9:30) for "Plan your day" hint
+    val morningHintSlotStart: LocalDateTime? = remember(date, events, geminiKeyPresent, dayOrganizerIdle) {
+        if (!geminiKeyPresent || !dayOrganizerIdle) return@remember null
+        allSlots.firstOrNull { slot ->
+            slot.events.isEmpty() && slot.start.hour in 7..9
+        }?.start
+    }
 
     // Auto-scroll to current time, positioned ~1/4 from the top
     val listState = rememberLazyListState()
@@ -449,6 +462,7 @@ fun CalendarDayView(
                         taskListTitleByTaskId = taskListTitleByTaskId,
                         taskUrgencyByTaskId = taskUrgencyByTaskId,
                         now = now,
+                        showMorningHint = item.slot.start == morningHintSlotStart,
                         onSlotActivated = onSlotActivated,
                         onEventActivated = onEventActivated
                     )
@@ -498,6 +512,7 @@ fun CalendarDayView(
                                     taskListTitleByTaskId = taskListTitleByTaskId,
                                     taskUrgencyByTaskId = taskUrgencyByTaskId,
                                     now = now,
+                                    showMorningHint = slot.start == morningHintSlotStart,
                                     onSlotActivated = onSlotActivated,
                                     onEventActivated = onEventActivated
                                 )
@@ -519,6 +534,7 @@ private fun CalendarSlotRow(
     taskListTitleByTaskId: Map<String, String>,
     taskUrgencyByTaskId: Map<String, TaskUrgency>,
     now: LocalDateTime,
+    showMorningHint: Boolean = false,
     onSlotActivated: (LocalDateTime) -> Unit,
     onEventActivated: (CalendarEvent) -> Unit
 ) {
@@ -671,6 +687,29 @@ private fun CalendarSlotRow(
                                 .weight(1f)
                                 .height(1.5.dp)
                                 .background(colors.accentPrimary.copy(alpha = 0.45f))
+                        )
+                    }
+                }
+
+                // Plan day hint in first empty morning slot
+                showMorningHint -> {
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Mic,
+                            contentDescription = null,
+                            tint = colors.textMuted.copy(alpha = 0.35f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Plan your day",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.textMuted.copy(alpha = 0.35f)
                         )
                     }
                 }
