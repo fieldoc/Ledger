@@ -35,9 +35,11 @@ class GeminiCaptureRepositoryTest {
         )
 
         val repository = GeminiCaptureRepository(
-            apiClient = GeminiApiClient { _, requestBody ->
-                prompts += extractPromptText(requestBody)
-                responses.removeFirst()
+            apiClient = object : GeminiApiClient {
+                override fun generateContent(apiKey: String, requestBody: JsonObject, config: GeminiRequestConfig): String {
+                    prompts += extractPromptText(requestBody)
+                    return responses.removeFirst()
+                }
             },
             imageEncoder = { "encoded-image" }
         )
@@ -58,8 +60,8 @@ class GeminiCaptureRepositoryTest {
     @Test
     fun `accepts commentary wrapped json from gemini response`() = runBlocking {
         val repository = GeminiCaptureRepository(
-            apiClient = GeminiApiClient { _, _ ->
-                geminiApiResponse(
+            apiClient = object : GeminiApiClient {
+                override fun generateContent(apiKey: String, requestBody: JsonObject, config: GeminiRequestConfig): String = geminiApiResponse(
                     """
                     Here is the parsed result:
                     ```json

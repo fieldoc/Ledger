@@ -3,6 +3,8 @@ package com.example.todowallapp.capture
 import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
+import com.example.todowallapp.capture.repository.GeminiPrompt
+import com.google.gson.JsonObject
 import com.example.todowallapp.data.model.DayPlan
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.repository.GoogleCalendarRepository
@@ -19,7 +21,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -53,6 +54,13 @@ class DayOrganizerCoordinator(
         private set
     var lastTranscription: String? = null
         private set
+
+    /** Multi-turn conversation for adjustments: list of (role, text) pairs. */
+    private var conversationTurns: MutableList<Pair<String, String>> = mutableListOf()
+
+    /** Cached system instruction and generation config from initial plan request. */
+    private var planSystemInstruction: String? = null
+    private var planGenerationConfig: JsonObject? = null
 
     private var parseJob: Job? = null
 
@@ -152,6 +160,9 @@ class DayOrganizerCoordinator(
         voiceCaptureManager.cancel()
         currentPlan = null
         lastTranscription = null
+        conversationTurns.clear()
+        planSystemInstruction = null
+        planGenerationConfig = null
         _state.value = DayOrganizerState.Idle
     }
 
@@ -199,7 +210,7 @@ class DayOrganizerCoordinator(
                 val tasks = taskProvider?.invoke() ?: emptyList()
                 val targetDate = LocalDate.now()
 
-                val prompt = geminiCaptureRepository.buildDayPlanPrompt(
+                val prompt: GeminiPrompt = geminiCaptureRepository.buildDayPlanGeminiPrompt(
                     rawTranscription = trimmed,
                     existingEvents = events,
                     existingTasks = tasks,
@@ -207,9 +218,18 @@ class DayOrganizerCoordinator(
                     currentTime = LocalTime.now()
                 )
 
+                // Cache system instruction & generation config for multi-turn adjustments
+                planSystemInstruction = prompt.systemInstruction
+                planGenerationConfig = prompt.generationConfig
+
                 val responseJson = withContext(Dispatchers.IO) {
                     geminiCaptureRepository.callGeminiForDayPlan(apiKey, prompt)
                 }
+
+                // Initialize conversation history for future adjustments
+                conversationTurns.clear()
+                conversationTurns.add("user" to prompt.userContent)
+                conversationTurns.add("model" to responseJson)
 
                 val plan = geminiCaptureRepository.parseDayPlanResponse(responseJson, targetDate)
                 currentPlan = plan
@@ -233,36 +253,43 @@ class DayOrganizerCoordinator(
 
         _state.value = DayOrganizerState.Processing(isAdjustment = true)
 
+        // Append the user adjustment turn optimistically
+        val userTurn = "user" to "Adjust the plan: $trimmed"
+        conversationTurns.add(userTurn)
+
         parseJob = scope?.launch {
             try {
                 val apiKey = geminiKeyStore.getApiKey()
                 if (apiKey == null) {
+                    conversationTurns.removeLastOrNull()
                     _state.value = DayOrganizerState.Error("Gemini API key not configured.", canRetry = false)
                     return@launch
                 }
 
-                val events = eventsProvider?.invoke() ?: emptyList()
-                val tasks = taskProvider?.invoke() ?: emptyList()
-                val previousPlanJson = serializePlanToJson(previousPlan)
-
-                val prompt = geminiCaptureRepository.buildPlanAdjustmentPrompt(
-                    adjustmentRequest = trimmed,
-                    previousPlanJson = previousPlanJson,
-                    existingEvents = events,
-                    existingTasks = tasks,
-                    targetDate = previousPlan.targetDate,
-                    currentTime = LocalTime.now()
-                )
+                val sysInstruction = planSystemInstruction
+                    ?: error("Missing system instruction from initial plan request.")
 
                 val responseJson = withContext(Dispatchers.IO) {
-                    geminiCaptureRepository.callGeminiForDayPlan(apiKey, prompt)
+                    geminiCaptureRepository.callGeminiForDayPlanMultiTurn(
+                        apiKey = apiKey,
+                        systemInstruction = sysInstruction,
+                        turns = conversationTurns.toList(),
+                        generationConfig = planGenerationConfig
+                    )
                 }
+
+                // Store model response for future turns
+                conversationTurns.add("model" to responseJson)
 
                 val updatedPlan = geminiCaptureRepository.parseDayPlanResponse(responseJson, previousPlan.targetDate)
                 currentPlan = updatedPlan
                 _state.value = DayOrganizerState.PlanReady(plan = updatedPlan)
 
             } catch (e: Exception) {
+                // Remove the failed user turn so conversation stays consistent
+                if (conversationTurns.lastOrNull() == userTurn) {
+                    conversationTurns.removeLastOrNull()
+                }
                 _state.value = DayOrganizerState.PlanReady(plan = previousPlan)
             }
         }
@@ -277,29 +304,4 @@ class DayOrganizerCoordinator(
         return parts.joinToString("\n")
     }
 
-    private fun serializePlanToJson(plan: DayPlan): String {
-        val blocksJson = plan.blocks.joinToString(",\n") { block ->
-            val fmt = DateTimeFormatter.ofPattern("HH:mm")
-            """    {
-      "title": "${block.title.replace("\"", "\\\"")}",
-      "startTime": "${block.startTime.format(fmt)}",
-      "endTime": "${block.endTime.format(fmt)}",
-      "category": "${block.category.name}",
-      "isExistingEvent": ${block.isExistingEvent},
-      "existingEventId": ${block.existingEventId?.let { "\"$it\"" } ?: "null"},
-      "notes": ${block.notes?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"},
-      "sourceTaskId": ${block.sourceTaskId?.let { "\"$it\"" } ?: "null"},
-      "sourceTaskListId": ${block.sourceTaskListId?.let { "\"$it\"" } ?: "null"}
-    }"""
-        }
-        return """{
-  "targetDate": "${plan.targetDate}",
-  "confidence": ${plan.confidence},
-  "warning": ${plan.warning?.let { "\"${it.replace("\"", "\\\"")}\"" } ?: "null"},
-  "summary": "${plan.summary.replace("\"", "\\\"")}",
-  "blocks": [
-$blocksJson
-  ]
-}"""
-    }
 }

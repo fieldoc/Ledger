@@ -34,3 +34,40 @@ enum class BlockCategory {
     LEISURE,
     EXISTING_EVENT
 }
+
+class DayPlanValidationException(val errors: List<String>) : Exception(
+    "Day plan validation failed: ${errors.joinToString("; ")}"
+)
+
+/**
+ * Validate a parsed day plan for logical consistency.
+ * Returns the plan with a warning appended if issues found (soft validation).
+ */
+fun DayPlan.validated(): DayPlan {
+    val errors = mutableListOf<String>()
+
+    for (block in blocks) {
+        if (block.startTime >= block.endTime) {
+            errors += "Block '${block.title}': start ${block.startTime.toLocalTime()} >= end ${block.endTime.toLocalTime()}"
+        }
+    }
+
+    val sorted = blocks.sortedBy { it.startTime }
+    for (i in 0 until sorted.size - 1) {
+        if (sorted[i].endTime > sorted[i + 1].startTime) {
+            errors += "Overlap: '${sorted[i].title}' ends at ${sorted[i].endTime.toLocalTime()} but '${sorted[i + 1].title}' starts at ${sorted[i + 1].startTime.toLocalTime()}"
+        }
+    }
+
+    if (confidence < 0f || confidence > 1f) {
+        errors += "Confidence $confidence outside [0,1]"
+    }
+
+    return if (errors.isEmpty()) {
+        this
+    } else {
+        val validationWarning = "Validation: ${errors.joinToString("; ")}"
+        val combinedWarning = if (warning != null) "$warning | $validationWarning" else validationWarning
+        copy(warning = combinedWarning)
+    }
+}
