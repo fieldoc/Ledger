@@ -48,7 +48,7 @@
 
 | Feature | Trigger | Details |
 |---------|---------|---------|
-| Open context menu | Double-click or medium hold (350–800ms) | Shows action options on focused task |
+| Open context menu | Double-click on focused task | Shows action options (configurable via `DOUBLE_CLICK_WINDOW_MS`) |
 | Schedule task | Context menu option | Opens promotion draft (see Calendar > Task Promotion) |
 | Delete task | Context menu option | Permanently removes task from Google Tasks |
 | Restore task | Context menu on completed task | Marks task incomplete again |
@@ -83,13 +83,12 @@
 
 | Feature | Trigger | Details |
 |---------|---------|---------|
-| Hold-to-talk | Encoder long hold (800ms+) | Screen dims, waveform visualizer appears, mic activates |
-| Visual feedback during hold | 400ms into hold | Circular progress arc appears on focused task |
+| Start voice input | Click header voice button | Screen dims, waveform visualizer appears, mic activates |
 | Waveform visualizer | While listening | Thin-line audio waveform in accent color, responds to mic amplitude |
 | Full-screen dim | While listening | Entire task list dims (like ambient mode) |
 | Listening timeout | 30 seconds | Auto-stops if no speech or continuous silence |
 | Silence detection | ~2 seconds of silence | Ends listening and begins processing |
-| Key release | Release encoder | Stops listening and processes captured speech |
+| Stop listening | Click encoder during listening | Stops listening and processes captured speech |
 
 </details>
 

@@ -35,8 +35,8 @@ The rotary encoder sends exactly 3 keycodes: LEFT_ARROW (CCW), RIGHT_ARROW (CW),
 | Switch to calendar view | Works (ViewSwitcherPill focusable) |
 | Calendar date/event navigation | Works (all modes) |
 | Calendar event action menu | Works |
-| Voice input (hold-to-talk) | Works (hold click 800ms) |
-| Task promotion | Works (hold click 350-800ms) |
+| Voice input | Works (header voice button, single click) |
+| Context menu on task | Works (double-click on focused task) |
 | Wake from ambient | Works (any input) |
 
 ### DEAD Features (No Encoder Access)
@@ -45,9 +45,9 @@ The rotary encoder sends exactly 3 keycodes: LEFT_ARROW (CCW), RIGHT_ARROW (CW),
 |---------|---------|----------------|
 | **Voice draft card / confirmation** | `VoiceInputState.Preview` exists in model but NO wall UI renders it. Voice input is a dead-end — speech is captured but can never be confirmed. | **P0**: Implement draft card per Design Spec #6 |
 | **Undo after task completion** | `UndoToast` component exists but is **never rendered** in the UI tree. Even if rendered, it's touch-only. | **P0**: Render UndoToast, add encoder focus node during undo window |
-| **Context menu (restore/delete)** | Requires long-click (touch only). No encoder gesture triggers it. No key handler within the menu. | **P1**: Add hold-click gesture differentiated by focus node type |
+| **Context menu (restore/delete)** | ~~Requires long-click (touch only)~~ **FIXED 2026-04-02**: Double-click on focused task opens context menu. | ~~P1~~ Done |
 | **Settings panel close** | No "Close" item in settings list. Dismissal requires Android back button or touch. | **P2**: Add "Close" item at top/bottom of settings list |
-| **Voice FAB button** | Touch-only, not in focus order. | Acceptable — hold-to-talk is the encoder interaction |
+| **Voice FAB button** | ~~Touch-only, not in focus order~~ **FIXED 2026-04-02**: Replaced with header voice button in encoder focus order. | ~~Acceptable~~ Done |
 
 ### Unreachable but Harmless Key Handlers
 - `Key.DirectionUp` — aliased with reachable keys throughout
@@ -392,7 +392,7 @@ This is scheduling Tetris: fitting variable-duration, variable-priority items in
 
 #### The UX Flow
 
-**Trigger**: Encoder long-hold (2s+) from the main task wall, or a dedicated "Plan My Day" focus node that appears in the morning (configurable window, e.g., 6am-10am). The wall subtly pulses the node's glow during the planning window to invite interaction without demanding it.
+**Trigger**: A dedicated "Plan My Day" focus node that appears in the morning (configurable window, e.g., 6am-10am). The wall subtly pulses the node's glow during the planning window to invite interaction without demanding it. Activated via single click on the focus node.
 
 **Phase 1 — The Wall Asks**
 
@@ -441,7 +441,7 @@ The user can interact with the proposed plan using the encoder:
   - Move earlier / Move later (AI re-shuffles around it)
   - Remove (AI fills the gap)
   - Change duration
-- **Hold-to-talk** to give verbal adjustments: "Actually, move the gym to morning" — Gemini re-proposes.
+- **Voice input** (via header button) to give verbal adjustments: "Actually, move the gym to morning" — Gemini re-proposes.
 
 This negotiation loop continues until the user is satisfied. The wall shows a running "Looks good? Click to lock it in" prompt at the bottom.
 

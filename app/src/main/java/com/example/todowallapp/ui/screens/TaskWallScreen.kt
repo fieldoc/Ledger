@@ -113,7 +113,6 @@ import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.dialog
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
@@ -205,6 +204,7 @@ private data class FolderSectionModel(
 }
 
 private enum class FocusNodeType {
+    VOICE_BUTTON,
     SEARCH_BUTTON,
     SETTINGS_BUTTON,
     FOLDER_HEADER,
@@ -224,12 +224,13 @@ private data class FocusNode(
 private fun folderHeaderKey(folderId: String): String = "folder-$folderId"
 private fun taskFocusKey(folderId: String, taskId: String): String = "task-$folderId-$taskId"
 private fun completedHeaderKey(folderId: String): String = "completed-$folderId"
+private const val VoiceButtonKey = "voice-button"
 private const val SearchButtonKey = "search-button"
 private const val SettingsButtonKey = "settings-button"
 
 private enum class AmbientTier { ACTIVE, QUIET, SLEEP }
-private const val PROMOTE_DELAY_MS = 350L
-private const val HOLD_TO_TALK_DELAY_MS = 800L
+/** Double-click detection window in ms. Tune this after testing on physical encoder hardware. */
+private const val DOUBLE_CLICK_WINDOW_MS = 350L
 private const val PositionUpdateThresholdPx = 0.5f
 private const val AMBIENT_MODE_THRESHOLD_MS = 30_000L
 
@@ -331,13 +332,7 @@ fun TaskWallScreen(
     var showSettings by remember { mutableStateOf(false) }
     var ambientPromptOffsetXDp by remember { mutableIntStateOf(0) }
     var ambientPromptOffsetYDp by remember { mutableIntStateOf(0) }
-    val holdToTalkScope = rememberCoroutineScope()
-    var holdToTalkKey by remember { mutableStateOf<Key?>(null) }
-    var holdToTalkActive by remember { mutableStateOf(false) }
-    var promoteTriggered by remember { mutableStateOf(false) }
-    var holdToTalkStartJob by remember { mutableStateOf<Job?>(null) }
-    var holdProgressJob by remember { mutableStateOf<Job?>(null) }
-    var holdProgressFraction by remember { mutableStateOf(0f) }
+    val clickScope = rememberCoroutineScope()
     var isViewSwitcherFocused by remember { mutableStateOf(false) }
     var contextMenuTask by remember { mutableStateOf<Task?>(null) }
     var contextMenuSelectedIndex by remember { mutableIntStateOf(0) }
@@ -464,7 +459,7 @@ fun TaskWallScreen(
             selectedFocusKey
                 ?.let { key -> focusIndexByKey[key] }
                 ?.let(focusOrder::getOrNull)
-                ?.takeUnless { node -> node.type == FocusNodeType.SETTINGS_BUTTON }
+                ?.takeUnless { node -> node.type == FocusNodeType.SETTINGS_BUTTON || node.type == FocusNodeType.VOICE_BUTTON }
                 ?.folderId
         }
     }
@@ -498,7 +493,7 @@ fun TaskWallScreen(
             val node = selectedFocusKey
                 ?.let { key -> focusIndexByKey[key] }
                 ?.let(focusOrder::getOrNull)
-            if (node == null || node.type == FocusNodeType.SETTINGS_BUTTON) {
+            if (node == null || node.type == FocusNodeType.SETTINGS_BUTTON || node.type == FocusNodeType.VOICE_BUTTON || node.type == FocusNodeType.SEARCH_BUTTON) {
                 null
             } else {
                 val folderName = sectionModels.firstOrNull { it.taskList.id == node.folderId }?.taskList?.title ?: ""
@@ -564,7 +559,7 @@ fun TaskWallScreen(
             ?.let { key -> focusIndexByKey[key] }
             ?.let(focusOrder::getOrNull)
             ?: return@LaunchedEffect
-        if (selectedNode.type != FocusNodeType.SETTINGS_BUTTON && selectedNode.folderId != expandedFolderId) {
+        if (selectedNode.type != FocusNodeType.SETTINGS_BUTTON && selectedNode.type != FocusNodeType.VOICE_BUTTON && selectedNode.type != FocusNodeType.SEARCH_BUTTON && selectedNode.folderId != expandedFolderId) {
             expandedFolderId = selectedNode.folderId
         }
     }
@@ -671,26 +666,33 @@ fun TaskWallScreen(
     fun navigateUp() {
         wakeUp()
         if (isViewSwitcherFocused) return
-        val firstFolderHeader = focusOrder.firstOrNull { node -> node.type == FocusNodeType.FOLDER_HEADER }
-        val settingsNodeKey = focusOrder.firstOrNull { node -> node.type == FocusNodeType.SETTINGS_BUTTON }?.key
         val currentIndex = selectedFocusKey?.let(focusIndexByKey::get) ?: 0
         val selectedNode = focusOrder.getOrNull(currentIndex)
-        val isOnFirstHeader = selectedNode?.type == FocusNodeType.FOLDER_HEADER && selectedNode.key == firstFolderHeader?.key
-        
-        if (isOnFirstHeader) {
-            if (settingsNodeKey != null) selectedFocusKey = settingsNodeKey else isViewSwitcherFocused = true
 
-            performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
-            return
-        }
-        if (selectedNode?.type == FocusNodeType.SEARCH_BUTTON) {
+        // Voice button (index 0) → ViewSwitcher
+        if (selectedNode?.type == FocusNodeType.VOICE_BUTTON) {
             isViewSwitcherFocused = true
             performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             return
         }
+        // Search → Voice
+        if (selectedNode?.type == FocusNodeType.SEARCH_BUTTON) {
+            selectedFocusKey = focusOrder.firstOrNull { it.type == FocusNodeType.VOICE_BUTTON }?.key
+                ?: run { isViewSwitcherFocused = true; null }
+            performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+            return
+        }
+        // Settings → Search
         if (selectedNode?.type == FocusNodeType.SETTINGS_BUTTON) {
-            // Move to search button (which is before settings in focus order)
             selectedFocusKey = SearchButtonKey
+            performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+            return
+        }
+        // First folder header → Settings
+        val firstFolderHeader = focusOrder.firstOrNull { it.type == FocusNodeType.FOLDER_HEADER }
+        if (selectedNode?.type == FocusNodeType.FOLDER_HEADER && selectedNode.key == firstFolderHeader?.key) {
+            selectedFocusKey = focusOrder.firstOrNull { it.type == FocusNodeType.SETTINGS_BUTTON }?.key
+                ?: run { isViewSwitcherFocused = true; null }
             performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             return
         }
@@ -698,7 +700,6 @@ fun TaskWallScreen(
             val nextIndex = (currentIndex - 1).coerceAtLeast(0)
             if (nextIndex != currentIndex) {
                 selectedFocusKey = focusOrder[nextIndex].key
-    
                 performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             }
         }
@@ -707,19 +708,31 @@ fun TaskWallScreen(
     fun navigateDown() {
         wakeUp()
         if (isViewSwitcherFocused) {
+            // ViewSwitcher → Voice button (first in focusOrder)
             isViewSwitcherFocused = false
-            selectedFocusKey = focusOrder.firstOrNull { node -> node.type == FocusNodeType.SETTINGS_BUTTON }?.key
-                ?: firstTaskFocusKey ?: selectedFocusKey ?: focusOrder.firstOrNull()?.key
-
+            selectedFocusKey = focusOrder.firstOrNull { it.type == FocusNodeType.VOICE_BUTTON }?.key
+                ?: focusOrder.firstOrNull()?.key
             performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             return
         }
         val currentIndex = selectedFocusKey?.let(focusIndexByKey::get) ?: 0
         val selectedNode = focusOrder.getOrNull(currentIndex)
+        // Voice → Search
+        if (selectedNode?.type == FocusNodeType.VOICE_BUTTON) {
+            selectedFocusKey = SearchButtonKey
+            performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+            return
+        }
+        // Search → Settings
+        if (selectedNode?.type == FocusNodeType.SEARCH_BUTTON) {
+            selectedFocusKey = SettingsButtonKey
+            performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+            return
+        }
+        // Settings → first folder header
         if (selectedNode?.type == FocusNodeType.SETTINGS_BUTTON) {
-            selectedFocusKey = focusOrder.firstOrNull { node -> node.type == FocusNodeType.FOLDER_HEADER }?.key
+            selectedFocusKey = focusOrder.firstOrNull { it.type == FocusNodeType.FOLDER_HEADER }?.key
                 ?: firstTaskFocusKey ?: selectedFocusKey ?: focusOrder.firstOrNull()?.key
-
             performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             return
         }
@@ -727,7 +740,6 @@ fun TaskWallScreen(
             val nextIndex = (currentIndex + 1).coerceAtMost(focusOrder.size - 1)
             if (nextIndex != currentIndex) {
                 selectedFocusKey = focusOrder[nextIndex].key
-    
                 performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             }
         }
@@ -742,6 +754,10 @@ fun TaskWallScreen(
         }
         val selectedNode = selectedFocusKey?.let(focusIndexByKey::get)?.let(focusOrder::getOrNull) ?: return
         when (selectedNode.type) {
+            FocusNodeType.VOICE_BUTTON -> {
+                performAppHaptic(view, context, AppHapticPattern.CONFIRM)
+                startVoiceWithPermission()
+            }
             FocusNodeType.SEARCH_BUTTON -> {
                 performAppHaptic(view, context, AppHapticPattern.CONFIRM)
                 showSearchOverlay = true
@@ -844,14 +860,12 @@ fun TaskWallScreen(
                 if (voiceState is VoiceInputState.Processing) {
                     return@onKeyEvent true
                 }
-                // During Listening, allow hold-to-talk key-up to pass through
-                // but consume all other keys (nav, new presses)
+                // During Listening, click stops capture; consume all other keys
                 if (voiceState is VoiceInputState.Listening) {
-                    if (keyEvent.type == KeyEventType.KeyUp && holdToTalkKey == keyEvent.key) {
-                        // Let this fall through to the hold-to-talk release handler below
-                    } else {
-                        return@onKeyEvent true
+                    if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key in CONFIRM_KEYS) {
+                        onStopVoice()
                     }
+                    return@onKeyEvent true
                 }
                 // Encoder navigation when context menu is open
                 if (contextMenuTask != null) {
@@ -991,57 +1005,12 @@ fun TaskWallScreen(
                             Key.DirectionUp, Key.DirectionRight -> { navigateUp(); true }
                             Key.DirectionDown, Key.DirectionLeft -> { navigateDown(); true }
                             Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                                if (voiceState is VoiceInputState.Idle) {
-                                    if (holdToTalkKey == keyEvent.key) return@onKeyEvent true
-                                    holdToTalkKey = keyEvent.key
-                                    holdToTalkActive = false
-                                    promoteTriggered = false
-                                    holdProgressFraction = 0f
-                                    holdToTalkStartJob?.cancel()
-                                    holdProgressJob?.cancel()
-                                    holdProgressJob = holdToTalkScope.launch {
-                                        while (holdToTalkKey == keyEvent.key && holdProgressFraction < 1f) {
-                                            holdProgressFraction += 0.02f
-                                            delay(16)
-                                        }
-                                    }
-                                    holdToTalkStartJob = holdToTalkScope.launch {
-                                        delay(PROMOTE_DELAY_MS)
-                                        if (holdToTalkKey == keyEvent.key) {
-                                            wakeUp()
-                                            promoteTriggered = true
-                                            // Handle promotion
-                                        }
-                                        delay(HOLD_TO_TALK_DELAY_MS - PROMOTE_DELAY_MS)
-                                        if (holdToTalkKey == keyEvent.key) {
-                                            holdToTalkActive = true
-                                            startVoiceWithPermission()
-                                        }
-                                    }
-                                    true
-                                } else {
-                                    selectCurrent(); true
-                                }
-                            }
-                            else -> { wakeUp(); false }
-                        }
-                    }
-                    KeyEventType.KeyUp -> {
-                        if (holdToTalkKey == keyEvent.key) {
-                            holdToTalkStartJob?.cancel()
-                            holdProgressJob?.cancel()
-                            holdToTalkKey = null
-                            holdProgressFraction = 0f
-                            if (holdToTalkActive) {
-                                if (voiceState is VoiceInputState.Listening) onStopVoice()
-                                holdToTalkActive = false
-                            } else if (!promoteTriggered) {
-                                // Double-click detection for context menu
                                 val focusedNode = selectedFocusKey?.let(focusIndexByKey::get)?.let(focusOrder::getOrNull)
                                 if (focusedNode?.task != null) {
+                                    // Task focused — use double-click detection
                                     val now = System.currentTimeMillis()
-                                    if (now - lastEncoderClickTimeMs < 350L) {
-                                        // Double-click on task — open context menu
+                                    if (now - lastEncoderClickTimeMs < DOUBLE_CLICK_WINDOW_MS) {
+                                        // Double-click: open context menu
                                         pendingClickJob?.cancel()
                                         pendingClickJob = null
                                         lastEncoderClickTimeMs = 0L
@@ -1049,32 +1018,23 @@ fun TaskWallScreen(
                                         contextMenuSelectedIndex = 0
                                         performAppHaptic(view, context, AppHapticPattern.CONFIRM)
                                     } else {
-                                        // First click — delay to allow double-click
+                                        // First click: delay to allow double-click window
                                         lastEncoderClickTimeMs = now
                                         pendingClickJob?.cancel()
-                                        pendingClickJob = holdToTalkScope.launch {
-                                            delay(350L)
+                                        pendingClickJob = clickScope.launch {
+                                            delay(DOUBLE_CLICK_WINDOW_MS)
                                             selectCurrent()
                                             lastEncoderClickTimeMs = 0L
                                         }
                                     }
                                 } else {
-                                    // Non-task focus node — instant click
+                                    // Non-task node (voice, search, settings, folder header) — instant click
                                     selectCurrent()
                                 }
-                            } else {
-                                // Medium hold (350-800ms) released — open context menu
-                                val focusedNode = selectedFocusKey?.let(focusIndexByKey::get)?.let(focusOrder::getOrNull)
-                                val task = focusedNode?.task
-                                if (task != null) {
-                                    contextMenuTask = task
-                                    contextMenuSelectedIndex = 0
-                                    performAppHaptic(view, context, AppHapticPattern.CONFIRM)
-                                }
+                                true
                             }
-                            promoteTriggered = false
-                            true
-                        } else false
+                            else -> { wakeUp(); false }
+                        }
                     }
                     else -> false
                 }
@@ -1125,13 +1085,29 @@ fun TaskWallScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                ClockHeader(
-                    isAmbientMode = isAmbientMode,
-                    isOnline = isOnline,
-                    lastSyncTime = lastSyncTime,
-                    lastSyncSuccess = lastSyncSuccess,
-                    onSyncClick = onRefresh
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (!isAmbientMode && voiceState is VoiceInputState.Idle) {
+                        VoiceShortcutButton(
+                            isFocused = !isViewSwitcherFocused && selectedFocusKey == VoiceButtonKey,
+                            onClick = {
+                                wakeUp()
+                                isViewSwitcherFocused = false
+                                selectedFocusKey = VoiceButtonKey
+                                startVoiceWithPermission()
+                            }
+                        )
+                    }
+                    ClockHeader(
+                        isAmbientMode = isAmbientMode,
+                        isOnline = isOnline,
+                        lastSyncTime = lastSyncTime,
+                        lastSyncSuccess = lastSyncSuccess,
+                        onSyncClick = onRefresh
+                    )
+                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1196,7 +1172,7 @@ fun TaskWallScreen(
                                 scheduledTaskIds = scheduledTaskIds,
                                 scheduledTaskTimes = scheduledTaskTimes,
                                 today = today,
-                                holdProgressFraction = if (selectedFolderId == model.taskList.id) holdProgressFraction else 0f,
+                                holdProgressFraction = 0f,
                                 onHeaderClick = {
                                     wakeUp()
                                     isViewSwitcherFocused = false
@@ -1386,17 +1362,6 @@ fun TaskWallScreen(
                         )
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-            }
-        }
-
-        // Voice FAB — visible when task list is populated and not in ambient/voice mode
-        if (!isAmbientMode && !isLoading && taskLists.isNotEmpty() && voiceState is VoiceInputState.Idle && !showSettings) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 32.dp, bottom = 32.dp)
-            ) {
-                VoiceFab(onClick = { wakeUp(); startVoiceWithPermission() })
             }
         }
 
@@ -1975,6 +1940,7 @@ private fun buildPendingTaskGroups(tasks: List<Task>, subtaskProgressByParentId:
 
 private fun buildFocusOrder(models: List<FolderSectionModel>, expandedFolderId: String?): List<FocusNode> {
     val focusOrder = mutableListOf<FocusNode>()
+    focusOrder += FocusNode(key = VoiceButtonKey, folderId = "", type = FocusNodeType.VOICE_BUTTON)
     focusOrder += FocusNode(key = SearchButtonKey, folderId = "", type = FocusNodeType.SEARCH_BUTTON)
     focusOrder += FocusNode(key = SettingsButtonKey, folderId = "", type = FocusNodeType.SETTINGS_BUTTON)
     models.forEach { model ->
@@ -2061,6 +2027,36 @@ private fun ErrorBadge(error: String, onDismiss: () -> Unit) {
                 fontWeight = FontWeight.Bold
             )
         }
+    }
+}
+
+@Composable
+private fun VoiceShortcutButton(isFocused: Boolean, onClick: () -> Unit) {
+    val colors = LocalWallColors.current
+    val shape = RoundedCornerShape(16.dp)
+    val interactionSource = remember { MutableInteractionSource() }
+
+    val backgroundColor by animateColorAsState(
+        targetValue = if (isFocused) colors.surfaceCard.copy(alpha = 0.6f) else colors.surfaceCard.copy(alpha = 0.2f),
+        animationSpec = tween(WallAnimations.SHORT),
+        label = "voiceBg"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(shape)
+            .background(backgroundColor)
+            .border(1.dp, if (isFocused) colors.accentPrimary.copy(alpha = 0.5f) else colors.rimGloss, shape)
+            .clickable(onClick = onClick, interactionSource = interactionSource, indication = null),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Mic,
+            contentDescription = "Voice input",
+            tint = if (isFocused) colors.accentPrimary else colors.textSecondary,
+            modifier = Modifier.size(24.dp)
+        )
     }
 }
 
@@ -2229,30 +2225,3 @@ private fun ActionPill(text: String, onClick: () -> Unit, primary: Boolean = fal
     }
 }
 
-@Composable
-private fun VoiceFab(onClick: () -> Unit) {
-    val colors = LocalWallColors.current
-    val interactionSource = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .size(56.dp)
-            .clip(CircleShape)
-            .background(colors.accentPrimary.copy(alpha = 0.85f))
-            .border(1.dp, colors.accentPrimary, CircleShape)
-            .clickable(
-                onClick = onClick,
-                interactionSource = interactionSource,
-                indication = null,
-                role = Role.Button,
-                onClickLabel = "Add task with voice"
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.Mic,
-            contentDescription = "Voice input",
-            tint = colors.surfaceBlack,
-            modifier = Modifier.size(24.dp)
-        )
-    }
-}

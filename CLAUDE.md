@@ -303,7 +303,8 @@ The app runs in immersive fullscreen mode configured in `MainActivity`:
 - `GeminiCaptureRepository` sends transcriptions to Gemini API for natural language parsing
 - Gemini extracts: task title, due date, target list, parent task, clarification
 - Falls back to raw transcription if Gemini parsing fails
-- Hold-to-talk encoder gesture (800ms hold) triggers voice input
+- Voice input triggered via header voice button (encoder: navigate to button, click)
+- Double-click on a focused task opens context menu (configurable window: DOUBLE_CLICK_WINDOW_MS)
 - Voice overlay (waveform + dim), draft card preview, and confirm/cancel flow are fully implemented
 
 ## Project Structure
