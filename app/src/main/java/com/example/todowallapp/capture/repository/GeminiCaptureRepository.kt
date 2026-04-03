@@ -725,17 +725,42 @@ INSTRUCTIONS:
 
 2) MULTI-TASK EXTRACTION
    A single utterance may contain multiple tasks. Split compound speech into individual tasks:
-   - "Buy milk and call the dentist" → 2 tasks
+   - "Buy milk and call the dentist" → 2 tasks (truly independent actions)
    - "I need to do laundry, oh and pick up the kids at 3, and remind me about the meeting" → 3 tasks
    - Connectors: "and", "also", "oh and", "plus", "as well as", "remind me to also"
    - Each task gets its own entry in the tasks array with independent fields.
    - For non-add intents, there is typically only 1 task (the target of the action).
 
-   SUBTASK GROUPING: When the user says multiple tasks should be under the same parent
-   (e.g., "Add three subtasks to painting: buy paint, get brushes, lay tarp"), set
-   sharedParentName to the parent task name on ALL child tasks. If the parent already
-   exists in the task list, also set parentTaskId to its ID. If it doesn't exist,
-   leave parentTaskId null — the app will create it first, then wire the children.
+   SUBTASK GROUPING: When the user describes a main activity with sub-items, use
+   sharedParentName to group them as parent + children instead of flat sibling tasks.
+   Set sharedParentName to the parent task name on ALL child tasks. If the parent
+   already exists in the task list, also set parentTaskId to its ID. If it doesn't
+   exist, leave parentTaskId null — the app will create it first, then wire the children.
+
+   CRITICAL — HIERARCHICAL vs FLAT detection:
+   - If sub-items are PART OF or NESTED WITHIN a larger activity, they are SUBTASKS:
+     "Go to the grocery store and buy bananas and apples"
+       → Parent: "Go to grocery store" (with sharedParentName=null, dueDate from context)
+       → Child: "Buy bananas" (sharedParentName="Go to grocery store")
+       → Child: "Buy apples" (sharedParentName="Go to grocery store")
+     "Remind me tomorrow to do the renovation and buy paint and get brushes and lay a tarp"
+       → Parent: "Renovation" (dueDate=tomorrow)
+       → Children: "Buy paint", "Get brushes", "Lay a tarp" (all with sharedParentName="Renovation")
+   - If items are INDEPENDENT actions with no shared context, they are SIBLING tasks:
+     "Buy milk and call the dentist" → 2 independent tasks (no sharedParentName)
+     "Do laundry and pick up kids" → 2 independent tasks
+     "Go to the store and then go to the gym" → 2 independent tasks (separate locations)
+
+   KEY SIGNALS that sub-items belong to a parent:
+   - Location/venue grouping: "go to [place] and [do X] and [do Y]" — the place is the parent
+   - Activity grouping: "do [project] and [step1] and [step2]" — the project is the parent
+   - Shopping grouping: "go shopping and get X and Y and Z" — shopping trip is the parent
+   - The "and" items are steps/components/purchases within the larger activity, not separate errands
+
+   The PARENT task entry should NOT have sharedParentName set on itself — only the children
+   get sharedParentName. The parent is a regular top-level task. The due date and other
+   metadata from the utterance (e.g., "remind me tomorrow") apply to the PARENT task.
+   Children inherit the same dueDate as the parent.
 
 3) CONVERSATIONAL NOISE STRIPPING
    Extract the actionable intent and reduce to the shortest imperative phrase that fully captures the task. Speech is messy — strip aggressively:
