@@ -494,7 +494,8 @@ class GeminiCaptureRepository(
         weatherForecast: String? = null,
         wakeHour: Int = 7,
         sleepHour: Int = 23,
-        focusedListTitle: String? = null
+        focusedListTitle: String? = null,
+        groundingContext: String? = null
     ): GeminiPrompt {
         val wakeTime = String.format("%02d:00", wakeHour)
         val sleepTime = String.format("%02d:00", sleepHour)
@@ -582,6 +583,12 @@ $weatherForecast
 USER'S FOCUSED LIST: "$focusedListTitle" — prioritize tasks from this list when scheduling.
 """ else ""
 
+        val groundingSection = if (!groundingContext.isNullOrBlank()) """
+
+REAL-TIME WEB CONTEXT (fetched via search, use this for weather/events/holidays):
+$groundingContext
+""" else ""
+
         val userContent = """
 TARGET DATE: $targetDate ($dayTypeLabel — ${dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }})
 CURRENT TIME: ${currentTime.format(DateTimeFormatter.ofPattern("HH:mm"))}
@@ -591,7 +598,7 @@ EXISTING CALENDAR EVENTS (DO NOT move or modify these — schedule around them):
 $eventsBlock
 
 EXISTING GOOGLE TASKS (for reference — match by name if the user mentions one):
-$tasksBlock$weatherSection$focusedListSection
+$tasksBlock$weatherSection$focusedListSection$groundingSection
 USER'S REQUEST:
 "$rawTranscription"
 """.trimIndent()
