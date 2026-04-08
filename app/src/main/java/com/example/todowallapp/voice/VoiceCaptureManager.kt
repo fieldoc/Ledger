@@ -208,12 +208,20 @@ class VoiceCaptureManager(private val context: Context) {
                                 _state.value = VoiceInputState.Error("Didn't catch that")
                             }
                         } else {
-                            // Not stopped yet — update partial display and restart
-                            _state.value = VoiceInputState.Listening(
-                                amplitudeLevel = 0f,
-                                partialText = accumulatedText.toString().ifEmpty { null }
-                            )
-                            restartRecognizer()
+                            // Not stopped yet. Only restart if we got something this segment or
+                            // have already accumulated text (user is pausing mid-utterance).
+                            // If both are empty the recognizer delivered silence with no speech —
+                            // restart would loop forever, so treat it as a no-speech error instead.
+                            if (text != null || accumulatedText.isNotEmpty()) {
+                                _state.value = VoiceInputState.Listening(
+                                    amplitudeLevel = 0f,
+                                    partialText = accumulatedText.toString().ifEmpty { null }
+                                )
+                                restartRecognizer()
+                            } else {
+                                errorCallback?.invoke("No speech detected")
+                                _state.value = VoiceInputState.Error("No speech detected")
+                            }
                         }
                     } else {
                         // Original non-continuous behavior
