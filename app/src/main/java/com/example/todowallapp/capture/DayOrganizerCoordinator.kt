@@ -114,6 +114,41 @@ class DayOrganizerCoordinator(
         voiceCaptureManager.startListening(continuous = true)
     }
 
+    /**
+     * Start the day planning flow with an already-captured transcription, skipping voice capture.
+     * Used by the unified voice flow when VoiceCaptureManager has already captured speech and
+     * classified it as day planning intent.
+     */
+    fun startWithTranscription(
+        transcription: String,
+        scope: CoroutineScope,
+        listProvider: () -> List<ExistingListRef>,
+        taskProvider: () -> List<ExistingTaskRef>,
+        eventsProvider: suspend () -> List<String>,
+        selectedCalendarId: String = GoogleCalendarRepository.PRIMARY_CALENDAR_ID,
+        weatherProvider: (suspend () -> String?)? = null,
+        wakeHour: Int = 7,
+        sleepHour: Int = 23,
+        focusedListTitle: String? = null
+    ) {
+        this.scope = scope
+        this.listProvider = listProvider
+        this.taskProvider = taskProvider
+        this.eventsProvider = eventsProvider
+        this.selectedCalendarId = selectedCalendarId
+        this.weatherProvider = weatherProvider
+        this.wakeHour = wakeHour
+        this.sleepHour = sleepHour
+        this.focusedListTitle = focusedListTitle
+
+        lastTranscription = transcription
+        _state.value = DayOrganizerState.Processing()
+
+        scope.launch {
+            handleTranscription(transcription)
+        }
+    }
+
     fun stopListening() {
         voiceCaptureManager.stopListening()
     }

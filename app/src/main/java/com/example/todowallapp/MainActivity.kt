@@ -479,11 +479,17 @@ private fun WallModeContent(
                         },
                         onSelectTaskList = viewModel::selectTaskList,
                         voiceState = voiceState,
-                        onStartVoice = viewModel::startVoiceInput,
+                        onStartUnifiedVoice = viewModel::startUnifiedVoiceCapture,
                         onStopVoice = viewModel::stopVoiceInput,
                         onCancelVoice = viewModel::cancelVoiceInput,
                         onConfirmVoice = { listId -> viewModel.confirmVoiceTasks(listId) },
                         onDismissVoiceError = viewModel::dismissVoiceError,
+                        dayOrganizerState = dayOrganizerState,
+                        onStopDayOrganizerListening = { viewModel.stopDayOrganizerListening() },
+                        onAcceptDayPlan = { viewModel.acceptDayPlan() },
+                        onAdjustDayPlan = { viewModel.adjustDayPlan() },
+                        onCancelDayOrganizer = { viewModel.cancelDayOrganizer() },
+                        onRetryDayOrganizer = { viewModel.retryDayOrganizer() },
                         error = uiState.error,
                         onDismissError = viewModel::clearError,
                         isSyncing = uiState.isSyncing,
@@ -660,6 +666,13 @@ private fun WallModeContent(
                         onCancelDayOrganizer = { viewModel.cancelDayOrganizer() },
                         onRetryDayOrganizer = { viewModel.retryDayOrganizer() },
                         onDayOrganizerFocusChange = { index -> viewModel.setDayOrganizerFocus(index) },
+                        // Unified voice (task voice from calendar)
+                        voiceState = voiceState,
+                        onStartUnifiedVoice = viewModel::startUnifiedVoiceCapture,
+                        onStopVoice = viewModel::stopVoiceInput,
+                        onCancelVoice = viewModel::cancelVoiceInput,
+                        onConfirmVoice = { listId -> viewModel.confirmVoiceTasks(listId) },
+                        onDismissVoiceError = viewModel::dismissVoiceError,
                         voiceStateIdle = voiceState is VoiceInputState.Idle,
                         hasSeenPlanDayHint = hasSeenPlanDayHint,
                         onDismissPlanDayHint = viewModel::dismissPlanDayHint,
@@ -835,7 +848,8 @@ private fun PhoneModeContent(
         onStopListening = phoneViewModel::stopVoiceInput,
         onCancelListening = phoneViewModel::cancelVoiceInput,
         onConfirm = { listId -> phoneViewModel.confirmVoiceTasks(listId) },
-        onDismissError = phoneViewModel::dismissVoiceError
+        onDismissError = phoneViewModel::dismissVoiceError,
+        amplitudeLevel = (phoneVoiceState as? VoiceInputState.Listening)?.amplitudeLevel ?: 0f
     )
 
     PhoneSettingsSheet(

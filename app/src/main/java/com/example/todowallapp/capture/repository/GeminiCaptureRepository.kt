@@ -108,7 +108,7 @@ class GeminiCaptureRepository(
         private const val TAG = "GeminiCapture"
         private const val TAG_GROUNDING = "GeminiGrounding"
         const val DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
-        const val DAY_PLAN_MODEL = "gemini-2.5-flash"
+        const val DAY_PLAN_MODEL = "gemini-3.1-flash-lite-preview"
 
         // ── Response schemas ─────────────────────────────────────────────
 

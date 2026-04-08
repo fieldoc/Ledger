@@ -2,6 +2,7 @@ package com.example.todowallapp.voice
 
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -75,9 +76,11 @@ class VoiceCaptureManager(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             if (continuous) {
-                // Longer silence thresholds for continuous mode — let the user pause to think
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+                // Moderate silence thresholds — the restart loop in onResults handles
+                // real continuity, and onEndOfSpeech stays in Listening state so the
+                // user sees no interruption. These just control when each segment ends.
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4_000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 6_000L)
             } else {
                 // Original generous thresholds for single-utterance mode
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
@@ -86,13 +89,45 @@ class VoiceCaptureManager(private val context: Context) {
         }
     }
 
+    private val audioManager by lazy {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
+
+    /** Mute the music stream to suppress Android's recognizer start/stop chimes. */
+    private fun muteBeep() {
+        try {
+            audioManager.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                AudioManager.ADJUST_MUTE,
+                0
+            )
+        } catch (_: Exception) { /* best-effort */ }
+    }
+
+    private fun unmuteBeep() {
+        try {
+            audioManager.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                AudioManager.ADJUST_UNMUTE,
+                0
+            )
+        } catch (_: Exception) { /* best-effort */ }
+    }
+
     private fun restartRecognizer() {
         mainHandler.removeCallbacks(timeoutRunnable)
+        // Mute to suppress Android's end/start chime during seamless restart
+        muteBeep()
+        // Create the new recognizer before destroying the old one to minimize
+        // the audio gap between segments — reduces mid-sentence cutoff risk.
+        val newRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+        newRecognizer.setRecognitionListener(activeListener ?: return)
         speechRecognizer?.destroy()
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
-        speechRecognizer?.setRecognitionListener(activeListener ?: return)
-        speechRecognizer?.startListening(buildSpeechIntent(continuous = true))
+        speechRecognizer = newRecognizer
+        newRecognizer.startListening(buildSpeechIntent(continuous = true))
         mainHandler.postDelayed(timeoutRunnable, LISTENING_TIMEOUT_MS)
+        // Unmute after a short delay to let the start chime pass
+        mainHandler.postDelayed({ unmuteBeep() }, 500)
     }
 
     fun startListening(continuous: Boolean = false) {
@@ -110,6 +145,10 @@ class VoiceCaptureManager(private val context: Context) {
             continuousMode = continuous
             userRequestedStop = false
             accumulatedText.clear()
+
+            // Mute the music stream in continuous mode to suppress Android's
+            // recognizer start chime — the user should hear nothing during listening.
+            if (continuous) muteBeep()
 
             speechRecognizer?.destroy()
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
@@ -142,6 +181,12 @@ class VoiceCaptureManager(private val context: Context) {
                 override fun onBufferReceived(buffer: ByteArray?) {}
 
                 override fun onEndOfSpeech() {
+                    if (continuousMode && !userRequestedStop) {
+                        // Stay in Listening state — the restart in onResults will
+                        // seamlessly continue. Don't flip to Processing or the UI
+                        // will flash a spinner and signal "done" to the user.
+                        return
+                    }
                     _state.value = VoiceInputState.Processing
                 }
 
@@ -167,6 +212,7 @@ class VoiceCaptureManager(private val context: Context) {
                     val isSilenceError = error == SpeechRecognizer.ERROR_NO_MATCH ||
                             error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
                     if (continuousMode && isSilenceError && accumulatedText.isNotEmpty()) {
+                        unmuteBeep()
                         val finalText = accumulatedText.toString().trim()
                         val callback = rawResultCallback
                         if (callback != null) {
@@ -177,6 +223,8 @@ class VoiceCaptureManager(private val context: Context) {
                         }
                         return
                     }
+
+                    if (continuousMode) unmuteBeep()
 
                     errorCallback?.invoke(message)
                     _state.value = VoiceInputState.Error(message)
@@ -264,12 +312,14 @@ class VoiceCaptureManager(private val context: Context) {
     fun stopListening() {
         if (continuousMode) {
             userRequestedStop = true
+            unmuteBeep()
         }
         speechRecognizer?.stopListening()
     }
 
     fun cancel() {
         mainHandler.removeCallbacks(timeoutRunnable)
+        if (continuousMode) unmuteBeep()
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
         speechRecognizer = null

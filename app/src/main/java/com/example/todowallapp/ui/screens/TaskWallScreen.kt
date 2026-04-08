@@ -158,7 +158,9 @@ import com.example.todowallapp.ui.utils.performAppHaptic
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
 import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.viewmodel.ThemeMode
+import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.capture.repository.VoiceIntent
+import com.example.todowallapp.ui.components.DayOrganizerOverlay
 import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -258,11 +260,18 @@ fun TaskWallScreen(
     onOpenScheduledTask: (Task, LocalDateTime?) -> Unit = { _, _ -> },
     onSelectTaskList: (String) -> Unit = {},
     voiceState: VoiceInputState = VoiceInputState.Idle,
-    onStartVoice: () -> Unit = {},
+    onStartUnifiedVoice: () -> Unit = {},
     onStopVoice: () -> Unit = {},
     onCancelVoice: () -> Unit = {},
     onConfirmVoice: (targetListId: String?) -> Unit = {},
     onDismissVoiceError: () -> Unit = {},
+    // Day organizer (routed from unified voice)
+    dayOrganizerState: DayOrganizerState = DayOrganizerState.Idle,
+    onStopDayOrganizerListening: () -> Unit = {},
+    onAcceptDayPlan: () -> Unit = {},
+    onAdjustDayPlan: () -> Unit = {},
+    onCancelDayOrganizer: () -> Unit = {},
+    onRetryDayOrganizer: () -> Unit = {},
     error: String? = null,
     onDismissError: () -> Unit = {},
     isSyncing: Boolean = false,
@@ -413,17 +422,17 @@ fun TaskWallScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            onStartVoice()
+            onStartUnifiedVoice()
         } else {
             Toast.makeText(context, "Microphone permission required for voice input", Toast.LENGTH_SHORT).show()
         }
     }
 
-    val startVoiceWithPermission = remember(onStartVoice) {
+    val startVoiceWithPermission = remember(onStartUnifiedVoice) {
         {
             when (PackageManager.PERMISSION_GRANTED) {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) -> {
-                    onStartVoice()
+                    onStartUnifiedVoice()
                 }
                 else -> {
                     audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -821,6 +830,7 @@ fun TaskWallScreen(
         }
     }
 
+    BackHandler(enabled = dayOrganizerState !is DayOrganizerState.Idle) { onCancelDayOrganizer() }
     BackHandler(enabled = voiceState is VoiceInputState.Preview) { onCancelVoice() }
     BackHandler(enabled = voiceState is VoiceInputState.Error) { onDismissVoiceError() }
     BackHandler(enabled = contextMenuTask != null) { contextMenuTask = null }
@@ -836,6 +846,29 @@ fun TaskWallScreen(
                 // Undo toast intercept: Enter while undo is visible triggers undo
                 if (undoVisible && keyEvent.type == KeyEventType.KeyUp && keyEvent.key in CONFIRM_KEYS) {
                     onUndo()
+                    return@onKeyEvent true
+                }
+                // Day organizer key handling — consume all keys when day planner is active
+                if (dayOrganizerState !is DayOrganizerState.Idle) {
+                    if (keyEvent.type == KeyEventType.KeyDown) {
+                        when (dayOrganizerState) {
+                            is DayOrganizerState.Listening, is DayOrganizerState.Adjusting -> {
+                                if (keyEvent.key in CONFIRM_KEYS) {
+                                    onStopDayOrganizerListening()
+                                }
+                            }
+                            is DayOrganizerState.PlanReady -> {
+                                // DayOrganizerOverlay handles its own focus navigation internally
+                            }
+                            is DayOrganizerState.Error -> {
+                                if (keyEvent.key in CONFIRM_KEYS) {
+                                    val errorState = dayOrganizerState as DayOrganizerState.Error
+                                    if (errorState.canRetry) onRetryDayOrganizer() else onCancelDayOrganizer()
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
                     return@onKeyEvent true
                 }
                 // Voice overlay key handling — consume all keys during non-Idle voice states
@@ -1097,7 +1130,7 @@ fun TaskWallScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    if (!isAmbientMode && voiceState is VoiceInputState.Idle) {
+                    if (!isAmbientMode && voiceState is VoiceInputState.Idle && dayOrganizerState is DayOrganizerState.Idle) {
                         VoiceShortcutButton(
                             isFocused = !isViewSwitcherFocused && selectedFocusKey == VoiceButtonKey,
                             onClick = {
@@ -1397,11 +1430,31 @@ fun TaskWallScreen(
                             enter = fadeIn(tween(WallAnimations.SHORT)),
                             exit = fadeOut(tween(WallAnimations.SHORT))
                         ) {
-                            WaveformVisualizer(
-                                amplitudeLevel = state.amplitudeLevel,
-                                isActive = true,
-                                modifier = Modifier.size(200.dp)
-                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                WaveformVisualizer(
+                                    amplitudeLevel = state.amplitudeLevel,
+                                    isActive = true,
+                                    modifier = Modifier.size(200.dp)
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                // Hint fades after 5s so experienced users aren't bothered
+                                var showHint by remember { mutableStateOf(true) }
+                                LaunchedEffect(Unit) {
+                                    kotlinx.coroutines.delay(5_000)
+                                    showHint = false
+                                }
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = showHint,
+                                    exit = fadeOut(tween(800))
+                                ) {
+                                    Text(
+                                        text = "add a task, or say \u201Cplan my day\u201D to schedule",
+                                        color = colors.textMuted.copy(alpha = 0.45f),
+                                        fontSize = 12.sp,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
                         }
                     }
                     is VoiceInputState.Processing -> {
@@ -1610,6 +1663,16 @@ fun TaskWallScreen(
                 }
             }
         }
+
+        // Day organizer overlay (when unified voice routes to day planning)
+        DayOrganizerOverlay(
+            state = dayOrganizerState,
+            onStopListening = onStopDayOrganizerListening,
+            onAccept = onAcceptDayPlan,
+            onAdjust = onAdjustDayPlan,
+            onCancel = onCancelDayOrganizer,
+            onRetry = onRetryDayOrganizer
+        )
 
         // Transient message toast — bottom-center
         androidx.compose.animation.AnimatedVisibility(
