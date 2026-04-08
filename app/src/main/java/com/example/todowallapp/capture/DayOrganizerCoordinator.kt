@@ -70,6 +70,7 @@ class DayOrganizerCoordinator(
     private var taskProvider: (() -> List<ExistingTaskRef>)? = null
     private var eventsProvider: (suspend () -> List<String>)? = null
     private var weatherProvider: (suspend () -> String?)? = null
+    private var groundingContextProvider: (suspend () -> String?)? = null
     private var selectedCalendarId: String = GoogleCalendarRepository.PRIMARY_CALENDAR_ID
     private var wakeHour: Int = 7
     private var sleepHour: Int = 23
@@ -88,7 +89,8 @@ class DayOrganizerCoordinator(
         weatherProvider: (suspend () -> String?)? = null,
         wakeHour: Int = 7,
         sleepHour: Int = 23,
-        focusedListTitle: String? = null
+        focusedListTitle: String? = null,
+        groundingContextProvider: (suspend () -> String?)? = null
     ) {
         this.scope = scope
         this.listProvider = listProvider
@@ -96,6 +98,7 @@ class DayOrganizerCoordinator(
         this.eventsProvider = eventsProvider
         this.selectedCalendarId = selectedCalendarId
         this.weatherProvider = weatherProvider
+        this.groundingContextProvider = groundingContextProvider
         this.wakeHour = wakeHour
         this.sleepHour = sleepHour
         this.focusedListTitle = focusedListTitle
@@ -193,6 +196,7 @@ class DayOrganizerCoordinator(
         taskProvider = null
         eventsProvider = null
         weatherProvider = null
+        groundingContextProvider = null
         focusedListTitle = null
         wakeHour = 7
         sleepHour = 23
@@ -242,6 +246,7 @@ class DayOrganizerCoordinator(
                 val events = eventsProvider?.invoke() ?: emptyList()
                 val tasks = taskProvider?.invoke() ?: emptyList()
                 val weather = weatherProvider?.invoke()
+                val grounding = groundingContextProvider?.invoke()
                 val targetDate = LocalDate.now()
 
                 val prompt: GeminiPrompt = geminiCaptureRepository.buildDayPlanGeminiPrompt(
@@ -253,7 +258,8 @@ class DayOrganizerCoordinator(
                     weatherForecast = weather,
                     wakeHour = wakeHour,
                     sleepHour = sleepHour,
-                    focusedListTitle = focusedListTitle
+                    focusedListTitle = focusedListTitle,
+                    groundingContext = grounding
                 )
 
                 // Cache system instruction & generation config for multi-turn adjustments
