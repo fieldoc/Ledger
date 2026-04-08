@@ -65,6 +65,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.todowallapp.data.model.CalendarEvent
 import com.example.todowallapp.data.model.GoogleCalendar
 import com.example.todowallapp.data.model.Task
@@ -1240,11 +1241,30 @@ fun CalendarScreen(
             ) {
                 when (val state = voiceState) {
                     is VoiceInputState.Listening -> {
-                        WaveformVisualizer(
-                            amplitudeLevel = state.amplitudeLevel,
-                            isActive = true,
-                            modifier = Modifier.size(200.dp)
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            WaveformVisualizer(
+                                amplitudeLevel = state.amplitudeLevel,
+                                isActive = true,
+                                modifier = Modifier.size(200.dp)
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            var showHint by remember { mutableStateOf(true) }
+                            LaunchedEffect(Unit) {
+                                kotlinx.coroutines.delay(5_000)
+                                showHint = false
+                            }
+                            AnimatedVisibility(
+                                visible = showHint,
+                                exit = fadeOut(tween(800))
+                            ) {
+                                Text(
+                                    text = "add a task, or say \u201Cplan my day\u201D to schedule",
+                                    color = LocalWallColors.current.textMuted.copy(alpha = 0.45f),
+                                    fontSize = 12.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
                     }
                     is VoiceInputState.Processing -> {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {

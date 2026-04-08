@@ -11,11 +11,14 @@ object VoiceIntentRouter {
         data class DayPlanning(val transcription: String) : RoutedIntent()
     }
 
+    // Only explicitly intentional phrases trigger day planning.
+    // Ambiguous input like "I need to do X" must fall through to task creation.
     private val DAY_PLANNING_PATTERNS = listOf(
         "plan my day",
         "plan my morning",
         "plan my afternoon",
         "plan my evening",
+        "plan my schedule",
         "plan today",
         "plan tomorrow",
         "organize my day",
@@ -24,19 +27,8 @@ object VoiceIntentRouter {
         "organize my afternoon",
         "organize my evening",
         "schedule my day",
-        "what should i do today",
-        "what should i do next",
-        "what should i do this morning",
-        "what should i do this afternoon",
-        "what should i do this evening",
-        "help me plan",
-        "plan my schedule",
         "lay out my day",
-        "map out my day",
-        "prioritize my day",
-        "prioritize my tasks",
-        "what's my plan",
-        "what is my plan"
+        "map out my day"
     )
 
     /**

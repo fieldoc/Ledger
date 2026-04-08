@@ -269,7 +269,7 @@ class TaskWallViewModel(
                     }
                     is VoiceIntentRouter.RoutedIntent.DayPlanning -> {
                         voiceCaptureManager.resetToIdle()
-                        routeToDayOrganizer(rawText)
+                        routeToDayOrganizer()
                     }
                 }
             } else {
@@ -839,7 +839,7 @@ class TaskWallViewModel(
         voiceCaptureManager.startListening()
     }
 
-    private fun routeToDayOrganizer(transcription: String) {
+    private fun routeToDayOrganizer() {
         if (!_uiState.value.hasCalendarScope) {
             setTransientMessage("Day planning requires calendar access. Grant permission in Settings.")
             return
@@ -849,8 +849,10 @@ class TaskWallViewModel(
             return
         }
 
-        dayOrganizerCoordinator.startWithTranscription(
-            transcription = transcription,
+        // Enter day planner listening mode — the trigger phrase ("plan my day")
+        // was just a mode switch, not content. The user will now dictate their
+        // actual tasks/durations for Gemini to schedule.
+        dayOrganizerCoordinator.startListening(
             scope = viewModelScope,
             listProvider = {
                 _uiState.value.taskLists.map { list ->

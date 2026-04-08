@@ -1426,11 +1426,31 @@ fun TaskWallScreen(
                             enter = fadeIn(tween(WallAnimations.SHORT)),
                             exit = fadeOut(tween(WallAnimations.SHORT))
                         ) {
-                            WaveformVisualizer(
-                                amplitudeLevel = state.amplitudeLevel,
-                                isActive = true,
-                                modifier = Modifier.size(200.dp)
-                            )
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                WaveformVisualizer(
+                                    amplitudeLevel = state.amplitudeLevel,
+                                    isActive = true,
+                                    modifier = Modifier.size(200.dp)
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                // Hint fades after 5s so experienced users aren't bothered
+                                var showHint by remember { mutableStateOf(true) }
+                                LaunchedEffect(Unit) {
+                                    kotlinx.coroutines.delay(5_000)
+                                    showHint = false
+                                }
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = showHint,
+                                    exit = fadeOut(tween(800))
+                                ) {
+                                    Text(
+                                        text = "add a task, or say \u201Cplan my day\u201D to schedule",
+                                        color = colors.textMuted.copy(alpha = 0.45f),
+                                        fontSize = 12.sp,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                }
+                            }
                         }
                     }
                     is VoiceInputState.Processing -> {

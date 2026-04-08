@@ -1,6 +1,7 @@
 package com.example.todowallapp.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
@@ -14,14 +15,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.data.model.DayPlan
 import com.example.todowallapp.data.model.PlanBlock
@@ -57,6 +65,8 @@ fun DayOrganizerOverlay(
                 is DayOrganizerState.Listening -> {
                     ListeningContent(
                         label = "PLANNING YOUR DAY",
+                        hint = "tell me your tasks and how long each will take",
+                        hintExample = "e.g.  groceries 30 min · dentist 1 hour · gym 45 min",
                         amplitudeLevel = state.amplitudeLevel,
                         onStop = onStopListening
                     )
@@ -100,10 +110,22 @@ fun DayOrganizerOverlay(
 @Composable
 private fun ListeningContent(
     label: String,
+    hint: String? = null,
+    hintExample: String? = null,
     amplitudeLevel: Float,
     onStop: () -> Unit
 ) {
     val colors = LocalWallColors.current
+
+    // Hint auto-fades after 5 seconds so experienced users aren't distracted
+    var showHint by remember(label) { mutableStateOf(hint != null) }
+    if (hint != null) {
+        LaunchedEffect(label) {
+            delay(5_000)
+            showHint = false
+        }
+    }
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.clickable(onClick = onStop)
@@ -121,6 +143,33 @@ private fun ListeningContent(
             modifier = Modifier.size(200.dp)
         )
         Spacer(Modifier.height(16.dp))
+
+        // Contextual hint — fades out after 5s
+        AnimatedVisibility(
+            visible = showHint,
+            exit = fadeOut(tween(800))
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = hint ?: "",
+                    color = colors.textMuted.copy(alpha = 0.5f),
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
+                )
+                hintExample?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = it,
+                        color = colors.textMuted.copy(alpha = 0.3f),
+                        fontSize = 11.sp,
+                        fontStyle = FontStyle.Italic,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+
         Text(
             text = "Click to finish speaking",
             color = colors.textMuted.copy(alpha = 0.5f),
