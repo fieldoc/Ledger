@@ -298,6 +298,8 @@ fun TaskWallScreen(
     onSignOut: () -> Unit = {},
     onPlanDay: () -> Unit = {},
     hasCalendarScope: Boolean = false,
+    geminiGroundingEnabled: Boolean = false,
+    onGeminiGroundingToggle: (Boolean) -> Unit = {},
     ambientLightMonitoringEnabled: Boolean = true,
     onSetBrightness: (Float) -> Unit = {},
     transientMessage: String? = null,
@@ -1247,7 +1249,9 @@ fun TaskWallScreen(
                 onSignOut = onSignOut,
                 onDismiss = { showSettings = false },
                 onPlanDay = onPlanDay,
-                hasCalendarScope = hasCalendarScope
+                hasCalendarScope = hasCalendarScope,
+                geminiGroundingEnabled = geminiGroundingEnabled,
+                onGeminiGroundingToggle = onGeminiGroundingToggle
             )
         }
 

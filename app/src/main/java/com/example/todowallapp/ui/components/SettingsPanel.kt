@@ -75,6 +75,7 @@ private enum class SettingsItemType {
     SYNC_INTERVAL,
     GEMINI_KEY,
     WEATHER,
+    SEARCH_GROUNDING,
     SWITCH_MODE,
     SIGN_OUT,
     CLOSE
@@ -107,6 +108,8 @@ fun SettingsPanel(
     onDismiss: () -> Unit,
     onPlanDay: () -> Unit = {},
     hasCalendarScope: Boolean = false,
+    geminiGroundingEnabled: Boolean = false,
+    onGeminiGroundingToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
@@ -123,6 +126,9 @@ fun SettingsPanel(
             add(SettingsItemType.SYNC_INTERVAL)
             add(SettingsItemType.GEMINI_KEY)
             add(SettingsItemType.WEATHER)
+            if (geminiKeyPresent) {
+                add(SettingsItemType.SEARCH_GROUNDING)
+            }
             add(SettingsItemType.SWITCH_MODE)
             add(SettingsItemType.SIGN_OUT)
             add(SettingsItemType.CLOSE)
@@ -180,6 +186,7 @@ fun SettingsPanel(
         SettingsItemType.SYNC_INTERVAL -> "Sync interval selected"
         SettingsItemType.GEMINI_KEY -> "Gemini API key selected"
         SettingsItemType.WEATHER -> "Weather settings selected"
+        SettingsItemType.SEARCH_GROUNDING -> "Search Grounding selected"
         SettingsItemType.SWITCH_MODE -> "Switch mode selected"
         SettingsItemType.SIGN_OUT -> "Sign out selected"
         SettingsItemType.CLOSE -> "Close settings selected"
@@ -325,6 +332,7 @@ fun SettingsPanel(
                             SettingsItemType.SYNC_INTERVAL -> adjustSyncInterval(forward = true)
                             SettingsItemType.GEMINI_KEY -> { /* touch-only: text field + buttons */ }
                             SettingsItemType.WEATHER -> { /* touch-only: text fields + buttons */ }
+                            SettingsItemType.SEARCH_GROUNDING -> onGeminiGroundingToggle(!geminiGroundingEnabled)
                             SettingsItemType.SWITCH_MODE -> triggerSwitchMode()
                             SettingsItemType.SIGN_OUT -> triggerSignOut()
                             SettingsItemType.CLOSE -> onDismiss()
@@ -531,6 +539,19 @@ fun SettingsPanel(
                 onSearchCities = onSearchCities,
                 scrollState = scrollState
             )
+
+            if (geminiKeyPresent) {
+                SettingsDivider()
+
+                SettingsItem(
+                    label = "Search Grounding",
+                    description = "Gemini queries weather & events (experimental)",
+                    isSelected = focusedItem == SettingsItemType.SEARCH_GROUNDING,
+                    onClick = { onGeminiGroundingToggle(!geminiGroundingEnabled) }
+                ) {
+                    SettingsValuePill(text = if (geminiGroundingEnabled) "On" else "Off")
+                }
+            }
 
             SettingsDivider()
 

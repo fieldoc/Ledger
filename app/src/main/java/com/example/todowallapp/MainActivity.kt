@@ -396,6 +396,7 @@ private fun WallModeContent(
     val geminiKeyPresent by viewModel.geminiKeyPresent.collectAsState()
     val isValidatingGeminiKey by viewModel.isValidatingGeminiKey.collectAsState()
     val geminiKeyError by viewModel.geminiKeyError.collectAsState()
+    val geminiGroundingEnabled by viewModel.geminiGroundingEnabled.collectAsState()
     val dayOrganizerState by viewModel.dayOrganizerState.collectAsState()
     val hasSeenPlanDayHint by viewModel.hasSeenPlanDayHint.collectAsState()
     var weatherApiKeyPresent by remember { mutableStateOf(weatherKeyStore.hasApiKey()) }
@@ -546,6 +547,8 @@ private fun WallModeContent(
                             }
                         },
                         hasCalendarScope = uiState.hasCalendarScope,
+                        geminiGroundingEnabled = geminiGroundingEnabled,
+                        onGeminiGroundingToggle = { viewModel.setGeminiGroundingEnabled(it) },
                         onSetBrightness = onSetBrightness,
                         transientMessage = uiState.transientMessage,
                         // Search, filter, reorder, priority, recurrence
