@@ -45,6 +45,15 @@ class VoiceCaptureManager(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // Continuous mode state
+    private var continuousMode = false
+    private var userRequestedStop = false
+    private val accumulatedText = StringBuilder()
+    var errorCallback: ((String) -> Unit)? = null
+
+    // Named listener field so restartRecognizer() can re-attach it
+    private var activeListener: RecognitionListener? = null
+
     private companion object {
         const val LISTENING_TIMEOUT_MS = 120_000L
     }
@@ -56,7 +65,37 @@ class VoiceCaptureManager(private val context: Context) {
         _state.value = VoiceInputState.Error("Listening timed out")
     }
 
-    fun startListening() {
+    private fun buildSpeechIntent(continuous: Boolean): Intent {
+        return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            if (continuous) {
+                // Longer silence thresholds for continuous mode — let the user pause to think
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 8000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10000L)
+            } else {
+                // Original generous thresholds for single-utterance mode
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
+            }
+        }
+    }
+
+    private fun restartRecognizer() {
+        mainHandler.removeCallbacks(timeoutRunnable)
+        speechRecognizer?.destroy()
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+        speechRecognizer?.setRecognitionListener(activeListener ?: return)
+        speechRecognizer?.startListening(buildSpeechIntent(continuous = true))
+        mainHandler.postDelayed(timeoutRunnable, LISTENING_TIMEOUT_MS)
+    }
+
+    fun startListening(continuous: Boolean = false) {
         if (_state.value is VoiceInputState.Listening || _state.value is VoiceInputState.Processing) {
             return
         }
@@ -66,26 +105,22 @@ class VoiceCaptureManager(private val context: Context) {
         }
 
         mainHandler.post {
+            // Initialize continuous mode state on the main thread so listener callbacks
+            // reading these fields are always on the same thread.
+            continuousMode = continuous
+            userRequestedStop = false
+            accumulatedText.clear()
+
             speechRecognizer?.destroy()
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(
-                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                )
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                // Generous silence timeouts so the user can pause to think mid-utterance
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
-            }
 
             var currentAmplitude = 0f
             var latestPartial: String? = null
 
-            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            // Clear any previous listener before creating a new one
+            activeListener = null
+
+            activeListener = object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
                     currentAmplitude = 0f
                     latestPartial = null
@@ -125,26 +160,74 @@ class VoiceCaptureManager(private val context: Context) {
                     }
                     speechRecognizer?.destroy()
                     speechRecognizer = null
+
+                    // In continuous mode, a silence/no-match error mid-session means the user
+                    // paused long enough to trigger a timeout. If we already have accumulated text,
+                    // deliver it rather than discarding it and showing an error.
+                    val isSilenceError = error == SpeechRecognizer.ERROR_NO_MATCH ||
+                            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                    if (continuousMode && isSilenceError && accumulatedText.isNotEmpty()) {
+                        val finalText = accumulatedText.toString().trim()
+                        val callback = rawResultCallback
+                        if (callback != null) {
+                            _state.value = VoiceInputState.Processing
+                            callback(finalText)
+                        } else {
+                            showPreviewFallback(finalText)
+                        }
+                        return
+                    }
+
+                    errorCallback?.invoke(message)
                     _state.value = VoiceInputState.Error(message)
                 }
 
                 override fun onResults(results: Bundle?) {
                     mainHandler.removeCallbacks(timeoutRunnable)
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val text = matches
-                        ?.firstOrNull()
-                        ?.trim()
-                        ?.takeIf { it.isNotEmpty() }
-                    if (text != null) {
-                        val callback = rawResultCallback
-                        if (callback != null) {
-                            _state.value = VoiceInputState.Processing
-                            callback(text)
+                    val text = matches?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+
+                    if (continuousMode) {
+                        // Buffer this segment's text
+                        if (text != null) {
+                            if (accumulatedText.isNotEmpty()) accumulatedText.append(" ")
+                            accumulatedText.append(text)
+                        }
+                        if (userRequestedStop) {
+                            // Deliver final accumulated result
+                            val finalText = accumulatedText.toString().trim()
+                            if (finalText.isNotEmpty()) {
+                                val callback = rawResultCallback
+                                if (callback != null) {
+                                    _state.value = VoiceInputState.Processing
+                                    callback(finalText)
+                                } else {
+                                    showPreviewFallback(finalText)
+                                }
+                            } else {
+                                _state.value = VoiceInputState.Error("Didn't catch that")
+                            }
                         } else {
-                            showPreviewFallback(text)
+                            // Not stopped yet — update partial display and restart
+                            _state.value = VoiceInputState.Listening(
+                                amplitudeLevel = 0f,
+                                partialText = accumulatedText.toString().ifEmpty { null }
+                            )
+                            restartRecognizer()
                         }
                     } else {
-                        _state.value = VoiceInputState.Error("Didn't catch that")
+                        // Original non-continuous behavior
+                        if (text != null) {
+                            val callback = rawResultCallback
+                            if (callback != null) {
+                                _state.value = VoiceInputState.Processing
+                                callback(text)
+                            } else {
+                                showPreviewFallback(text)
+                            }
+                        } else {
+                            _state.value = VoiceInputState.Error("Didn't catch that")
+                        }
                     }
                 }
 
@@ -162,14 +245,18 @@ class VoiceCaptureManager(private val context: Context) {
                 }
 
                 override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
+            }
 
-            speechRecognizer?.startListening(intent)
+            speechRecognizer?.setRecognitionListener(activeListener)
+            speechRecognizer?.startListening(buildSpeechIntent(continuous))
             mainHandler.postDelayed(timeoutRunnable, LISTENING_TIMEOUT_MS)
         }
     }
 
     fun stopListening() {
+        if (continuousMode) {
+            userRequestedStop = true
+        }
         speechRecognizer?.stopListening()
     }
 
@@ -178,6 +265,8 @@ class VoiceCaptureManager(private val context: Context) {
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
         speechRecognizer = null
+        errorCallback = null
+        activeListener = null
         _state.value = VoiceInputState.Idle
     }
 
@@ -219,5 +308,7 @@ class VoiceCaptureManager(private val context: Context) {
         mainHandler.removeCallbacks(timeoutRunnable)
         speechRecognizer?.destroy()
         speechRecognizer = null
+        errorCallback = null
+        activeListener = null
     }
 }

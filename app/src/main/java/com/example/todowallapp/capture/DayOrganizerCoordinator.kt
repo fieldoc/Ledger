@@ -103,9 +103,12 @@ class DayOrganizerCoordinator(
         voiceCaptureManager.rawResultCallback = { rawText ->
             handleTranscription(rawText)
         }
+        voiceCaptureManager.errorCallback = { message ->
+            _state.value = DayOrganizerState.Error(message, canRetry = true)
+        }
 
         _state.value = DayOrganizerState.Listening()
-        voiceCaptureManager.startListening()
+        voiceCaptureManager.startListening(continuous = true)
     }
 
     fun stopListening() {
@@ -120,9 +123,17 @@ class DayOrganizerCoordinator(
         voiceCaptureManager.rawResultCallback = { rawText ->
             handleAdjustmentTranscription(rawText, plan)
         }
+        voiceCaptureManager.errorCallback = { message ->
+            _state.value = DayOrganizerState.Error(message, canRetry = true)
+        }
 
         _state.value = DayOrganizerState.Adjusting(previousPlan = plan)
-        voiceCaptureManager.startListening()
+        // VoiceCaptureManager._state may be stuck at Processing from the previous recognition
+        // (onResults sets it to Processing then fires the callback, but never resets it).
+        // That stuck state causes startListening()'s guard to return early without activating
+        // the mic. Reset to Idle first so the guard passes.
+        voiceCaptureManager.resetToIdle()
+        voiceCaptureManager.startListening(continuous = true)
     }
 
     fun stopAdjustmentListening() {
@@ -169,6 +180,7 @@ class DayOrganizerCoordinator(
         parseJob?.cancel()
         parseJob = null
         voiceCaptureManager.rawResultCallback = null
+        voiceCaptureManager.errorCallback = null
         voiceCaptureManager.cancel()
         currentPlan = null
         lastTranscription = null

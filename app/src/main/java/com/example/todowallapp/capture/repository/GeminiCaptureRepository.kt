@@ -614,7 +614,7 @@ USER'S REQUEST:
         val config = GeminiRequestConfig(
             model = DAY_PLAN_MODEL,
             connectTimeoutMs = 30_000,
-            readTimeoutMs = 45_000
+            readTimeoutMs = 90_000
         )
         val response = apiClient.generateContent(apiKey = apiKey, requestBody = requestBody, config = config)
         extractTextFromGeminiResponse(response)
@@ -641,7 +641,7 @@ USER'S REQUEST:
         val config = GeminiRequestConfig(
             model = DAY_PLAN_MODEL,
             connectTimeoutMs = 30_000,
-            readTimeoutMs = 45_000
+            readTimeoutMs = 90_000
         )
         val response = apiClient.generateContent(apiKey = apiKey, requestBody = requestBody, config = config)
         extractTextFromGeminiResponse(response)
