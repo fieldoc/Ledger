@@ -106,6 +106,7 @@ class GeminiCaptureRepository(
 
     companion object {
         private const val TAG = "GeminiCapture"
+        private const val TAG_GROUNDING = "GeminiGrounding"
         const val DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
         const val DAY_PLAN_MODEL = "gemini-2.5-flash"
 
@@ -306,6 +307,39 @@ class GeminiCaptureRepository(
             }
         })
         generationConfig?.let { add("generationConfig", it) }
+    }
+
+    /**
+     * Like buildRequestBody() but adds googleSearch grounding tool.
+     * IMPORTANT: Must NOT include responseSchema — mutually exclusive with grounding in the Gemini API.
+     */
+    private fun buildGroundingRequestBody(
+        systemInstruction: String,
+        userContent: String
+    ): JsonObject = JsonObject().apply {
+        add("systemInstruction", JsonObject().apply {
+            add("parts", JsonArray().apply {
+                add(JsonObject().apply { addProperty("text", systemInstruction) })
+            })
+        })
+        add("contents", JsonArray().apply {
+            add(JsonObject().apply {
+                addProperty("role", "user")
+                add("parts", JsonArray().apply {
+                    add(JsonObject().apply { addProperty("text", userContent) })
+                })
+            })
+        })
+        // googleSearch grounding tool — incompatible with responseSchema/responseMimeType
+        add("tools", JsonArray().apply {
+            add(JsonObject().apply {
+                add("googleSearch", JsonObject())
+            })
+        })
+        // Only temperature — no responseSchema or responseMimeType
+        add("generationConfig", JsonObject().apply {
+            addProperty("temperature", 0.1)
+        })
     }
 
     // ── Public API ────────────────────────────────────────────────────
@@ -659,6 +693,72 @@ USER'S REQUEST:
         Log.d(TAG, "callGeminiForDayPlanMultiTurn latency: ${elapsed}ms")
         latencyCallback?.invoke("dayplan_multiturn", elapsed)
         extractTextFromGeminiResponse(response)
+    }
+
+    /**
+     * Fetches real-time context (weather, local events, holidays) via Gemini search grounding.
+     * Returns plain text on success, null on any failure (grounding failures are silent).
+     *
+     * IMPORTANT: Uses googleSearch grounding tool, which is incompatible with responseSchema.
+     * This is intentionally a plain-text call — do NOT add responseSchema here.
+     */
+    suspend fun fetchGroundingContext(
+        apiKey: String,
+        location: String?,
+        date: LocalDate,
+        latencyCallback: ((Long) -> Unit)? = null
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val dayOfWeek = date.dayOfWeek.getDisplayName(
+                java.time.format.TextStyle.FULL,
+                java.util.Locale.getDefault()
+            )
+            val dateStr = date.format(DateTimeFormatter.ofPattern("MMMM d, yyyy"))
+
+            val locationLine = if (!location.isNullOrBlank()) {
+                "My location is: $location."
+            } else {
+                "Location not configured."
+            }
+
+            val userContent = buildString {
+                appendLine("Today is $dayOfWeek, $dateStr. $locationLine")
+                appendLine()
+                appendLine("Please search the web and provide a concise plain-text summary (under 150 words) of:")
+                if (!location.isNullOrBlank()) {
+                    appendLine("1. Today's weather conditions and forecast for $location")
+                    appendLine("2. Any noteworthy local events or activities happening today near $location")
+                }
+                appendLine("${if (!location.isNullOrBlank()) "3" else "1"}. Any national holidays, observances, or culturally significant events today")
+                appendLine()
+                appendLine("Plain text only. No markdown, no bullet points, no headers.")
+            }
+
+            val systemInstruction =
+                "You are a helpful assistant. Use your Google Search tool to look up real-time information. " +
+                "Summarize your findings concisely in plain prose."
+
+            val requestBody = buildGroundingRequestBody(systemInstruction, userContent)
+            val config = GeminiRequestConfig(
+                model = DAY_PLAN_MODEL,
+                connectTimeoutMs = 15_000,
+                readTimeoutMs = 30_000
+            )
+
+            val start = System.currentTimeMillis()
+            val responseJson = apiClient.generateContent(apiKey = apiKey, requestBody = requestBody, config = config)
+            val elapsed = System.currentTimeMillis() - start
+
+            Log.d(TAG_GROUNDING, "Grounding context fetched in ${elapsed}ms")
+            latencyCallback?.invoke(elapsed)
+            this@GeminiCaptureRepository.latencyCallback?.invoke("grounding", elapsed)
+
+            val text = extractTextFromGeminiResponse(responseJson)
+            if (text.isBlank()) null else text
+        } catch (e: Exception) {
+            Log.w(TAG_GROUNDING, "Grounding context fetch failed: ${e.message}")
+            null
+        }
     }
 
     // ── Prompt builders ───────────────────────────────────────────────
