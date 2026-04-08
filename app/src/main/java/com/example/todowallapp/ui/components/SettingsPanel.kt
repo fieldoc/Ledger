@@ -275,6 +275,8 @@ fun SettingsPanel(
                                 SettingsItemType.SLEEP_SCHEDULE -> adjustSleepSchedule(forward = false)
                                 else -> Unit
                             }
+                        } else if (!isEditingValue && focusedItem == SettingsItemType.SEARCH_GROUNDING) {
+                            onGeminiGroundingToggle(!geminiGroundingEnabled)
                         } else if (focusedIndex > 0) {
                             focusedIndex--
                             isEditingValue = false
@@ -289,6 +291,8 @@ fun SettingsPanel(
                                 SettingsItemType.SLEEP_SCHEDULE -> adjustSleepSchedule(forward = true)
                                 else -> Unit
                             }
+                        } else if (!isEditingValue && focusedItem == SettingsItemType.SEARCH_GROUNDING) {
+                            onGeminiGroundingToggle(!geminiGroundingEnabled)
                         } else if (focusedIndex < items.lastIndex) {
                             focusedIndex++
                             isEditingValue = false
