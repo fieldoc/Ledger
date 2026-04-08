@@ -705,8 +705,7 @@ USER'S REQUEST:
     suspend fun fetchGroundingContext(
         apiKey: String,
         location: String?,
-        date: LocalDate,
-        latencyCallback: ((Long) -> Unit)? = null
+        date: LocalDate
     ): String? = withContext(Dispatchers.IO) {
         try {
             val dayOfWeek = date.dayOfWeek.getDisplayName(
@@ -750,7 +749,6 @@ USER'S REQUEST:
             val elapsed = System.currentTimeMillis() - start
 
             Log.d(TAG_GROUNDING, "Grounding context fetched in ${elapsed}ms")
-            latencyCallback?.invoke(elapsed)
             this@GeminiCaptureRepository.latencyCallback?.invoke("grounding", elapsed)
 
             val text = extractTextFromGeminiResponse(responseJson)
