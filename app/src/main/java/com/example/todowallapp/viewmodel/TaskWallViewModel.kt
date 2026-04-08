@@ -165,6 +165,13 @@ class TaskWallViewModel(
     private val _hasSeenPlanDayHint = MutableStateFlow(true) // default true, DataStore overrides to false if unseen
     val hasSeenPlanDayHint: StateFlow<Boolean> = _hasSeenPlanDayHint.asStateFlow()
 
+    // Gemini grounding setting
+    private val _geminiGroundingEnabled = MutableStateFlow(false)
+    val geminiGroundingEnabled: StateFlow<Boolean> = _geminiGroundingEnabled.asStateFlow()
+
+    private val _lastGroundingLatencyMs = MutableStateFlow<Long?>(null)
+    val lastGroundingLatencyMs: StateFlow<Long?> = _lastGroundingLatencyMs.asStateFlow()
+
     // Gemini key state (for wall-mode settings)
     private val _geminiKeyPresent = MutableStateFlow(geminiKeyStore.hasApiKey())
     val geminiKeyPresent: StateFlow<Boolean> = _geminiKeyPresent.asStateFlow()
@@ -189,6 +196,7 @@ class TaskWallViewModel(
     private val lightStartHourKey = intPreferencesKey("light_start_hour")
     private val lightEndHourKey = intPreferencesKey("light_end_hour")
     private val hasSeenPlanDayHintKey = booleanPreferencesKey("has_seen_plan_day_hint")
+    private val geminiGroundingEnabledKey = booleanPreferencesKey("gemini_grounding_enabled")
 
     companion object {
         private const val SILENT_SIGN_IN_TIMEOUT_MS = 3_000L
@@ -229,6 +237,12 @@ class TaskWallViewModel(
     private val promotionTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
     init {
+        geminiCaptureRepository.latencyCallback = { tag, ms ->
+            if (tag == "grounding") {
+                _lastGroundingLatencyMs.value = ms
+            }
+            android.util.Log.d("GeminiLatency", "[$tag] ${ms}ms")
+        }
         voiceParsingCoordinator.configure(
             scope = viewModelScope,
             listProvider = {
@@ -287,6 +301,7 @@ class TaskWallViewModel(
             _lightStartHour.value = prefs[lightStartHourKey] ?: 8
             _lightEndHour.value = prefs[lightEndHourKey] ?: 19
             _hasSeenPlanDayHint.value = prefs[hasSeenPlanDayHintKey] ?: false
+            prefs[geminiGroundingEnabledKey]?.let { _geminiGroundingEnabled.value = it }
 
             val selectedCalendarDate = prefs[selectedCalendarDateKey]
                 ?.let { savedDate -> parseLocalDate(savedDate) }
@@ -1209,7 +1224,24 @@ class TaskWallViewModel(
             sleepHour = _sleepStartHour.value, // sleep-start = bedtime
             focusedListTitle = _uiState.value.selectedTaskListTitle.takeIf {
                 _uiState.value.selectedTaskListId != null
-            }
+            },
+            groundingContextProvider = if (_geminiGroundingEnabled.value && isOnline.value) {
+                {
+                    val apiKey = geminiKeyStore.getApiKey()
+                    val location = try {
+                        WeatherKeyStore(context).getLocation()
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (apiKey != null) {
+                        geminiCaptureRepository.fetchGroundingContext(
+                            apiKey = apiKey,
+                            location = location,
+                            date = java.time.LocalDate.now()
+                        )
+                    } else null
+                }
+            } else null
         )
     }
 
@@ -1644,6 +1676,15 @@ class TaskWallViewModel(
         viewModelScope.launch {
             context.dataStore.edit { prefs ->
                 prefs[hasSeenPlanDayHintKey] = true
+            }
+        }
+    }
+
+    fun setGeminiGroundingEnabled(enabled: Boolean) {
+        _geminiGroundingEnabled.value = enabled
+        viewModelScope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[geminiGroundingEnabledKey] = enabled
             }
         }
     }
