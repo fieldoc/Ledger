@@ -4,15 +4,15 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
 import androidx.core.content.ContextCompat
 import com.example.todowallapp.capture.DayOrganizerState
+import com.example.todowallapp.capture.repository.VoiceIntent
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.ui.components.DayOrganizerOverlay
 import com.example.todowallapp.ui.theme.LocalWallColors
+import com.example.todowallapp.voice.VoiceInputState
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
@@ -36,9 +36,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -66,6 +71,7 @@ import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskUrgency
 import com.example.todowallapp.data.model.occursOn
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -83,6 +89,7 @@ import com.example.todowallapp.ui.components.TaskPickerOverlay
 import com.example.todowallapp.ui.components.SettingsPanel
 import com.example.todowallapp.ui.components.ViewSwitcherOption
 import com.example.todowallapp.ui.components.ViewSwitcherPill
+import com.example.todowallapp.ui.components.WaveformVisualizer
 import com.example.todowallapp.ui.components.WeekStrip
 import com.example.todowallapp.viewmodel.ThemeMode
 import com.example.todowallapp.ui.components.buildHalfHourSlots
@@ -168,6 +175,13 @@ fun CalendarScreen(
     onCancelDayOrganizer: () -> Unit = {},
     onRetryDayOrganizer: () -> Unit = {},
     onDayOrganizerFocusChange: (Int) -> Unit = {},
+    // Unified voice
+    voiceState: VoiceInputState = VoiceInputState.Idle,
+    onStartUnifiedVoice: () -> Unit = {},
+    onStopVoice: () -> Unit = {},
+    onCancelVoice: () -> Unit = {},
+    onConfirmVoice: (targetListId: String?) -> Unit = {},
+    onDismissVoiceError: () -> Unit = {},
     voiceStateIdle: Boolean = true,
     hasSeenPlanDayHint: Boolean = true,
     onDismissPlanDayHint: () -> Unit = {},
@@ -178,7 +192,7 @@ fun CalendarScreen(
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) onStartDayOrganizer()
+        if (granted) onStartUnifiedVoice()
     }
 
     val startDayOrganizerWithPermission = remember(onStartDayOrganizer, onDismissPlanDayHint) {
@@ -187,6 +201,19 @@ fun CalendarScreen(
             when (PackageManager.PERMISSION_GRANTED) {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) -> {
                     onStartDayOrganizer()
+                }
+                else -> {
+                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
+        }
+    }
+
+    val startUnifiedVoiceWithPermission = remember(onStartUnifiedVoice) {
+        {
+            when (PackageManager.PERMISSION_GRANTED) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) -> {
+                    onStartUnifiedVoice()
                 }
                 else -> {
                     audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -224,6 +251,7 @@ fun CalendarScreen(
     var showEventAction by remember { mutableStateOf(false) }
     var eventActionTarget by remember { mutableStateOf<CalendarEvent?>(null) }
     var eventActionFocus by remember { mutableIntStateOf(0) }
+    var voicePreviewFocus by remember { mutableIntStateOf(0) }
 
     // 3-day view state
     var threeDaySelectedColumn by remember { mutableIntStateOf(1) } // 0=yesterday, 1=today, 2=tomorrow
@@ -279,6 +307,43 @@ fun CalendarScreen(
                 // Dismiss first-use hint on any encoder input
                 if (!hasSeenPlanDayHint) onDismissPlanDayHint()
 
+                // Voice overlay active — handle encoder navigation
+                if (voiceState !is VoiceInputState.Idle) {
+                    when (voiceState) {
+                        is VoiceInputState.Listening -> {
+                            if (keyEvent.key in listOf(Key.Enter, Key.NumPadEnter, Key.Spacebar)) {
+                                onStopVoice()
+                            }
+                        }
+                        is VoiceInputState.Preview -> {
+                            when (keyEvent.key) {
+                                Key.DirectionRight, Key.DirectionDown -> {
+                                    voicePreviewFocus = 1
+                                }
+                                Key.DirectionLeft, Key.DirectionUp -> {
+                                    voicePreviewFocus = 0
+                                }
+                                Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
+                                    if (voicePreviewFocus == 0) {
+                                        onConfirmVoice((voiceState as VoiceInputState.Preview).targetListId)
+                                    } else {
+                                        onCancelVoice()
+                                    }
+                                    voicePreviewFocus = 0
+                                }
+                                else -> {}
+                            }
+                        }
+                        is VoiceInputState.Error -> {
+                            if (keyEvent.key in listOf(Key.Enter, Key.NumPadEnter, Key.Spacebar)) {
+                                onDismissVoiceError()
+                            }
+                        }
+                        else -> {}
+                    }
+                    return@onKeyEvent true  // Consume all input when voice overlay is active
+                }
+
                 // Day Organizer active — consume all encoder input
                 val orgState = dayOrganizerState
                 if (orgState !is DayOrganizerState.Idle) {
@@ -325,10 +390,10 @@ fun CalendarScreen(
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionRight, Key.DirectionDown -> {
                             isSettingsFocused = false
-                            // Skip Plan Day button if not visible
-                            val planDayVisible = geminiKeyPresent && voiceStateIdle &&
-                                dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope
-                            if (planDayVisible) isPlanDayFocused = true
+                            // Skip Voice button if not visible
+                            val voiceButtonVisible = voiceState is VoiceInputState.Idle &&
+                                dayOrganizerState is DayOrganizerState.Idle
+                            if (voiceButtonVisible) isPlanDayFocused = true
                             else isViewSwitcherFocused = true
                             true
                         }
@@ -368,7 +433,7 @@ fun CalendarScreen(
                             true
                         }
                         Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                            startDayOrganizerWithPermission()
+                            startUnifiedVoiceWithPermission()
                             true
                         }
                         else -> true
@@ -380,9 +445,9 @@ fun CalendarScreen(
                     return@onKeyEvent when (keyEvent.key) {
                         Key.DirectionLeft, Key.DirectionUp -> {
                             isViewSwitcherFocused = false
-                            val planDayVisible = geminiKeyPresent && voiceStateIdle &&
-                                dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope
-                            if (planDayVisible) isPlanDayFocused = true
+                            val voiceButtonVisible = voiceState is VoiceInputState.Idle &&
+                                dayOrganizerState is DayOrganizerState.Idle
+                            if (voiceButtonVisible) isPlanDayFocused = true
                             else isSettingsFocused = true
                             true
                         }
@@ -789,11 +854,10 @@ fun CalendarScreen(
                     isFocused = isSettingsFocused,
                     onClick = { showSettings = true }
                 )
-                if (geminiKeyPresent && voiceStateIdle &&
-                    dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope) {
-                    PlanDayButton(
+                if (voiceState is VoiceInputState.Idle && dayOrganizerState is DayOrganizerState.Idle) {
+                    VoiceButton(
                         isFocused = isPlanDayFocused,
-                        onClick = startDayOrganizerWithPermission
+                        onClick = startUnifiedVoiceWithPermission
                     )
                 }
                 ViewSwitcherPill(
@@ -817,10 +881,10 @@ fun CalendarScreen(
                 )
             }
 
-            // First-use discovery hint for Plan Day button
-            val planDayVisible = geminiKeyPresent && voiceStateIdle &&
-                dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope
-            if (planDayVisible && !hasSeenPlanDayHint) {
+            // First-use discovery hint for Voice button
+            val voiceBtnVisible = voiceState is VoiceInputState.Idle &&
+                dayOrganizerState is DayOrganizerState.Idle
+            if (voiceBtnVisible && !hasSeenPlanDayHint) {
                 var hintVisible by remember { mutableStateOf(true) }
                 val hintAlpha by animateFloatAsState(
                     targetValue = if (hintVisible) 0.5f else 0f,
@@ -1152,18 +1216,6 @@ fun CalendarScreen(
             )
         }
 
-        // Day Organizer Voice FAB
-        if (!isLoading && voiceStateIdle && geminiKeyPresent &&
-            dayOrganizerState is DayOrganizerState.Idle && hasCalendarScope) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 32.dp, bottom = 32.dp)
-            ) {
-                VoiceFab(onClick = startDayOrganizerWithPermission)
-            }
-        }
-
         // Day Organizer Overlay
         DayOrganizerOverlay(
             state = dayOrganizerState,
@@ -1173,6 +1225,115 @@ fun CalendarScreen(
             onCancel = onCancelDayOrganizer,
             onRetry = onRetryDayOrganizer
         )
+
+        // Task voice overlay (when unified voice routes to task action)
+        AnimatedVisibility(
+            visible = voiceState !is VoiceInputState.Idle,
+            enter = fadeIn(animationSpec = tween(200)),
+            exit = fadeOut(animationSpec = tween(300))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.75f)),
+                contentAlignment = Alignment.Center
+            ) {
+                when (val state = voiceState) {
+                    is VoiceInputState.Listening -> {
+                        WaveformVisualizer(
+                            amplitudeLevel = state.amplitudeLevel,
+                            isActive = true,
+                            modifier = Modifier.size(200.dp)
+                        )
+                    }
+                    is VoiceInputState.Processing -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(
+                                color = LocalWallColors.current.accentPrimary,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text("Processing...", color = LocalWallColors.current.textSecondary)
+                        }
+                    }
+                    is VoiceInputState.Preview -> {
+                        val response = state.response
+                        val intentLabel = when (response.intent) {
+                            VoiceIntent.ADD -> if (response.tasks.size > 1) "Draft Tasks" else "Draft Task"
+                            VoiceIntent.COMPLETE -> "Complete Task"
+                            VoiceIntent.DELETE -> "Delete Task"
+                            VoiceIntent.RESCHEDULE -> "Reschedule Task"
+                            VoiceIntent.QUERY -> "Tasks Found"
+                            VoiceIntent.AMEND -> "Amended Task"
+                        }
+                        Card(
+                            modifier = Modifier.fillMaxWidth(0.7f).padding(32.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = LocalWallColors.current.surfaceCard
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(24.dp)) {
+                                Text(
+                                    intentLabel,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = LocalWallColors.current.textPrimary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                response.tasks.forEach { task ->
+                                    Text(
+                                        task.title,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = LocalWallColors.current.textPrimary
+                                    )
+                                }
+                                if (response.clarification != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        response.clarification,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = LocalWallColors.current.textMuted
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Button(
+                                        onClick = { onConfirmVoice(state.targetListId) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = LocalWallColors.current.accentPrimary
+                                        )
+                                    ) { Text("Confirm") }
+                                    OutlinedButton(onClick = onCancelVoice) { Text("Cancel") }
+                                }
+                            }
+                        }
+                    }
+                    is VoiceInputState.Error -> {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(0.5f).padding(32.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = LocalWallColors.current.surfaceCard
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    state.message,
+                                    color = LocalWallColors.current.urgencyOverdue,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(onClick = onDismissVoiceError) { Text("Dismiss") }
+                            }
+                        }
+                    }
+                    is VoiceInputState.Idle -> {} // Not shown (AnimatedVisibility handles this)
+                }
+            }
+        }
     } // end outer Box
 
     BackHandler(enabled = showSettings) { showSettings = false }
@@ -1343,7 +1504,7 @@ private fun CalendarSettingsButton(isFocused: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun PlanDayButton(isFocused: Boolean, onClick: () -> Unit) {
+private fun VoiceButton(isFocused: Boolean, onClick: () -> Unit) {
     val colors = LocalWallColors.current
     val shape = RoundedCornerShape(16.dp)
     val interactionSource = remember { MutableInteractionSource() }
@@ -1365,36 +1526,8 @@ private fun PlanDayButton(isFocused: Boolean, onClick: () -> Unit) {
     ) {
         Icon(
             imageVector = Icons.Outlined.Mic,
-            contentDescription = "Plan your day",
+            contentDescription = "Voice input",
             tint = if (isFocused) colors.accentPrimary else colors.textSecondary,
-            modifier = Modifier.size(24.dp)
-        )
-    }
-}
-
-@Composable
-private fun VoiceFab(onClick: () -> Unit) {
-    val colors = LocalWallColors.current
-    val interactionSource = remember { MutableInteractionSource() }
-    Box(
-        modifier = Modifier
-            .size(56.dp)
-            .clip(CircleShape)
-            .background(colors.accentPrimary.copy(alpha = 0.85f))
-            .border(1.dp, colors.accentPrimary, CircleShape)
-            .clickable(
-                onClick = onClick,
-                interactionSource = interactionSource,
-                indication = null,
-                role = Role.Button,
-                onClickLabel = "Plan your day with voice"
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = Icons.Outlined.Mic,
-            contentDescription = "Day organizer voice input",
-            tint = colors.surfaceBlack,
             modifier = Modifier.size(24.dp)
         )
     }

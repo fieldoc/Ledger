@@ -15,6 +15,7 @@ import com.example.todowallapp.capture.DayOrganizerCoordinator
 import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.capture.RescheduleRetryContext
 import com.example.todowallapp.capture.VoiceParsingCoordinator
+import com.example.todowallapp.capture.router.VoiceIntentRouter
 import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
@@ -203,6 +204,11 @@ class TaskWallViewModel(
     private val isReauthenticating = java.util.concurrent.atomic.AtomicBoolean(false)
     private val signInMutex = Mutex()
     private val inFlightTaskIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    /** When true, the next voice result gets routed through VoiceIntentRouter before
+     *  forwarding to either VoiceParsingCoordinator or DayOrganizerCoordinator.
+     *  Reset to false after routing completes. Accessed only on main thread. */
+    private var unifiedVoiceRouting = false
+
     private val voiceParsingCoordinator = VoiceParsingCoordinator(
         voiceCaptureManager, geminiCaptureRepository, geminiKeyStore
     )
@@ -229,22 +235,47 @@ class TaskWallViewModel(
     private val promotionTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
 
     init {
+        // Configure voice parsing with a routing-aware callback wrapper.
+        // When unifiedVoiceRouting is true, the callback classifies intent first
+        // and may redirect to the day organizer instead of task parsing.
+        val listProvider = {
+            _uiState.value.taskLists.map { list ->
+                ExistingListRef(id = list.id, title = list.title)
+            }
+        }
+        val taskProvider = {
+            _uiState.value.allTaskLists.flatMap { list ->
+                list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
+                    ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
+                }
+            }.take(30)
+        }
         voiceParsingCoordinator.configure(
             scope = viewModelScope,
-            listProvider = {
-                _uiState.value.taskLists.map { list ->
-                    ExistingListRef(id = list.id, title = list.title)
-                }
-            },
-            taskProvider = {
-                _uiState.value.allTaskLists.flatMap { list ->
-                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map {
-                        ExistingTaskRef(id = it.id, title = it.title, listId = list.taskList.id)
-                    }
-                }.take(30)
-            },
+            listProvider = listProvider,
+            taskProvider = taskProvider,
             listIdValidator = ::resolveKnownTaskListId
         )
+
+        // Wrap the rawResultCallback set by configure() with intent routing
+        val taskVoiceCallback = voiceCaptureManager.rawResultCallback
+        voiceCaptureManager.rawResultCallback = { rawText ->
+            if (unifiedVoiceRouting) {
+                unifiedVoiceRouting = false
+                val routed = VoiceIntentRouter.classifyIntent(rawText)
+                when (routed) {
+                    is VoiceIntentRouter.RoutedIntent.TaskAction -> {
+                        taskVoiceCallback?.invoke(rawText)
+                    }
+                    is VoiceIntentRouter.RoutedIntent.DayPlanning -> {
+                        voiceCaptureManager.resetToIdle()
+                        routeToDayOrganizer(rawText)
+                    }
+                }
+            } else {
+                taskVoiceCallback?.invoke(rawText)
+            }
+        }
         loadSettings()
         checkAuthState()
         observeConnectivity()
@@ -790,6 +821,90 @@ class TaskWallViewModel(
         voiceParsingCoordinator.cancelParse()
         voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.startListening()
+    }
+
+    /**
+     * Unified voice capture: starts listening, then routes the transcription
+     * to either task voice (ADD/COMPLETE/etc.) or day planning based on what
+     * the user said. This is the single entry point for all mic buttons.
+     */
+    fun startUnifiedVoiceCapture() {
+        if (!isOnline.value) {
+            setTransientMessage("No internet connection — voice input requires network access.")
+            return
+        }
+        voiceParsingCoordinator.cancelParse()
+        voiceParsingCoordinator.clearMetadata()
+        unifiedVoiceRouting = true
+        voiceCaptureManager.startListening()
+    }
+
+    private fun routeToDayOrganizer(transcription: String) {
+        if (!_uiState.value.hasCalendarScope) {
+            setTransientMessage("Day planning requires calendar access. Grant permission in Settings.")
+            return
+        }
+        if (!geminiKeyStore.hasApiKey()) {
+            setTransientMessage("Day planning requires a Gemini API key. Add one in Settings.")
+            return
+        }
+
+        dayOrganizerCoordinator.startWithTranscription(
+            transcription = transcription,
+            scope = viewModelScope,
+            listProvider = {
+                _uiState.value.taskLists.map { list ->
+                    ExistingListRef(id = list.id, title = list.title)
+                }
+            },
+            taskProvider = {
+                _uiState.value.allTaskLists.flatMap { list ->
+                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map { task ->
+                        ExistingTaskRef(
+                            id = task.id,
+                            title = task.title,
+                            listId = list.taskList.id,
+                            listTitle = list.taskList.title,
+                            dueDate = task.dueDate,
+                            priority = task.priority,
+                            preferredTime = task.preferredTime,
+                            recurrenceInfo = task.recurrenceRule?.toHumanReadable()
+                        )
+                    }
+                }.take(40)
+            },
+            eventsProvider = {
+                val today = java.time.LocalDate.now()
+                val events = calendarRepository.getEventsForDateRange(
+                    today, today, _uiState.value.selectedCalendarId
+                ).getOrElse { emptyMap() }
+
+                events[today]?.map { event ->
+                    if (event.isAllDay) {
+                        "All day ${event.title} (all-day)"
+                    } else {
+                        val start = event.startDateTime?.toLocalTime()
+                        val end = event.endDateTime?.toLocalTime()
+                        val timeRange = "${start?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}-${end?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}"
+                        val durationMin = if (start != null && end != null) {
+                            java.time.Duration.between(start, end).toMinutes()
+                        } else null
+                        val durationSuffix = durationMin?.let { " (${it}min)" } ?: ""
+                        "$timeRange ${event.title}$durationSuffix"
+                    }
+                } ?: emptyList()
+            },
+            selectedCalendarId = _uiState.value.selectedCalendarId,
+            weatherProvider = {
+                val todayWeather = _weatherForecast.value[java.time.LocalDate.now()]
+                todayWeather?.name
+            },
+            wakeHour = _sleepEndHour.value,
+            sleepHour = _sleepStartHour.value,
+            focusedListTitle = _uiState.value.selectedTaskListTitle.takeIf {
+                _uiState.value.selectedTaskListId != null
+            }
+        )
     }
 
     fun stopVoiceInput() {
