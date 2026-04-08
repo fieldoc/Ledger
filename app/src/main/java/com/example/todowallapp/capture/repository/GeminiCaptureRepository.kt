@@ -98,6 +98,12 @@ class GeminiCaptureRepository(
     }
 ) {
 
+    /**
+     * Optional latency callback. Called after each Gemini HTTP call completes.
+     * First arg: call tag (e.g. "dayplan", "dayplan_multiturn"). Second arg: elapsed milliseconds.
+     */
+    var latencyCallback: ((String, Long) -> Unit)? = null
+
     companion object {
         private const val TAG = "GeminiCapture"
         const val DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
@@ -616,7 +622,11 @@ USER'S REQUEST:
             connectTimeoutMs = 30_000,
             readTimeoutMs = 90_000
         )
+        val start = System.currentTimeMillis()
         val response = apiClient.generateContent(apiKey = apiKey, requestBody = requestBody, config = config)
+        val elapsed = System.currentTimeMillis() - start
+        Log.d(TAG, "callGeminiForDayPlan latency: ${elapsed}ms")
+        latencyCallback?.invoke("dayplan", elapsed)
         extractTextFromGeminiResponse(response)
     }
 
@@ -643,7 +653,11 @@ USER'S REQUEST:
             connectTimeoutMs = 30_000,
             readTimeoutMs = 90_000
         )
+        val start = System.currentTimeMillis()
         val response = apiClient.generateContent(apiKey = apiKey, requestBody = requestBody, config = config)
+        val elapsed = System.currentTimeMillis() - start
+        Log.d(TAG, "callGeminiForDayPlanMultiTurn latency: ${elapsed}ms")
+        latencyCallback?.invoke("dayplan_multiturn", elapsed)
         extractTextFromGeminiResponse(response)
     }
 
