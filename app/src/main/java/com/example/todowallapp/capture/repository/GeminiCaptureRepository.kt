@@ -102,7 +102,7 @@ class GeminiCaptureRepository(
      * Optional latency callback. Called after each Gemini HTTP call completes.
      * First arg: call tag (e.g. "dayplan", "dayplan_multiturn"). Second arg: elapsed milliseconds.
      */
-    var latencyCallback: ((String, Long) -> Unit)? = null
+    @Volatile var latencyCallback: ((String, Long) -> Unit)? = null
 
     companion object {
         private const val TAG = "GeminiCapture"
