@@ -156,3 +156,142 @@ F1 and F3 can run in parallel. F2 depends on F1 completing first.
 - [ ] Code review subagent after all fixes complete
 - [ ] Check: does DayOrganizerOverlay's "Click to finish speaking" still work correctly?
 - [ ] Check: non-day-planner voice capture unaffected (continuous=false by default)
+
+---
+
+# Auto-Dev Plan: Branch 3 — Coordinator Robustness
+
+**Created:** 2026-04-08
+
+## Feature List
+
+| # | Feature | Files |
+|---|---------|-------|
+| F1 | Partial event creation recovery (track success/failure, retry failed blocks) | DayOrganizerCoordinator.kt, DayOrganizerOverlay.kt |
+| F2 | Store created event IDs during acceptPlan() for rollback | DayOrganizerCoordinator.kt |
+| F3 | Surface adjustment failures with error toast instead of silent revert | DayOrganizerCoordinator.kt, DayOrganizerOverlay.kt |
+| F4 | 60s application-level timeout around Gemini call → Error(canRetry=true) | DayOrganizerCoordinator.kt |
+| F5 | Adjustment attempt counter to prevent infinite loops | DayOrganizerCoordinator.kt |
+| F6 | Handle cancel-during-processing race condition | DayOrganizerCoordinator.kt |
+| F7 | Log Gemini retry attempts and timing (already partially done; add attempt timestamps) | GeminiCaptureRepository.kt |
+| F8 | Distinguish client errors (400/403) from server errors (500) in messages | GeminiCaptureRepository.kt |
+| F9 | Handle empty/whitespace transcription before sending to Gemini | DayOrganizerCoordinator.kt |
+| F10 | Haptic feedback on state transitions (listening start, plan ready, error, accept complete) | DayOrganizerOverlay.kt, Haptics.kt |
+
+## Assumptions
+
+1. **F1 retry**: "Retry failed blocks" re-attempts only the failed blocks from the last `acceptPlan()` call — not a full restart. Adds `PartialSuccess(createdCount, failedBlocks)` state.
+2. **F2 rollback**: Storing IDs is the requirement. No rollback UI is built yet (future work).
+3. **F3 transient error**: Use a `SharedFlow<String>` in the coordinator for adjustment errors. UI collects and shows a brief overlay message. State reverts to `PlanReady` as before.
+4. **F4 timeout**: 60s is applied around the entire Gemini block (not just HTTP). `TimeoutCancellationException` caught explicitly with a user-friendly message.
+5. **F5 counter**: Max 10 adjustment attempts. Reset on cancel and on new initial plan.
+6. **F6 race**: Guard each state-setting in the parseJob with a check: if already `Idle`, don't overwrite.
+7. **F7 logging**: Add per-attempt timestamp logging to `HttpGeminiApiClient`. Latency callback already fires.
+8. **F8 errors**: 400 → "Invalid request", 401/403 → "API key error", 500/503 → stay retryable + "Server error".
+9. **F9 transcription**: Improve empty-transcription message. Make adjustment path also emit an error event (not just silent revert) for whitespace input.
+10. **F10 haptics**: Use `LaunchedEffect(state)` in `DayOrganizerOverlay` with `LocalView.current` + `LocalContext.current`. Add `ERROR` pattern to `AppHapticPattern`.
+
+## Dependency Graph
+
+```
+F2 (IDs) ──┐
+F1 (partial) depends on F2 (to store IDs on success)
+F3 (adj error) ─── independent of F1/F2
+F4 (timeout) ────── independent
+F5 (counter) ────── independent
+F6 (race) ───────── independent
+F7 (logging) ────── independent (GeminiCaptureRepository.kt)
+F8 (errors) ─────── independent (GeminiCaptureRepository.kt, same file as F7)
+F9 (transcription) ─ independent
+F10 (haptics) ────── independent (UI files)
+```
+
+## Parallel Groups
+
+- **Group A** (sequential, all in DayOrganizerCoordinator.kt): F2 → F1, then F3, F4, F5, F6, F9
+- **Group B** (parallel with A): F7 + F8 in GeminiCaptureRepository.kt
+- **Group C** (after A): F10 in DayOrganizerOverlay.kt + Haptics.kt
+
+## Execution Order
+
+### Step 1: DayOrganizerCoordinator.kt changes (F1–F6, F9) — all in one file
+
+#### F2: Store created event IDs
+- [ ] Add `private var lastCreatedEventIds: MutableList<String> = mutableListOf()`
+- [ ] Clear in `cancel()`
+- [ ] In `acceptPlan()`, collect event IDs from `Result<CalendarEvent>.getOrNull()?.id`
+
+#### F1: Partial event creation recovery
+- [ ] Add `PartialSuccess(createdCount: Int, failedBlocks: List<PlanBlock>)` to `DayOrganizerState`
+- [ ] In `acceptPlan()`: collect succeeded/failed separately; if mixed → `PartialSuccess`; if all fail → `Error(canRetry=false)` (or true?); if all succeed → `Idle`
+- [ ] Add `suspend fun retryFailedBlocks(blocks: List<PlanBlock>): Result<Int>` that re-runs createEvent only for the given blocks
+
+#### F3: Adjustment error events
+- [ ] Add `private val _adjustmentErrors = MutableSharedFlow<String>(extraBufferCapacity = 1)`
+- [ ] Expose `val adjustmentErrors: SharedFlow<String> = _adjustmentErrors.asSharedFlow()`
+- [ ] In `handleAdjustmentTranscription` catch block: emit error to `_adjustmentErrors` before reverting to PlanReady
+
+#### F4: 60s timeout
+- [ ] Import `kotlinx.coroutines.withTimeout`, `kotlinx.coroutines.TimeoutCancellationException`
+- [ ] In `handleTranscription`: wrap Gemini call with `withTimeout(60_000L)`, catch `TimeoutCancellationException`
+- [ ] In `handleAdjustmentTranscription`: same
+
+#### F5: Adjustment counter
+- [ ] Add `private var adjustmentAttempts = 0`, `companion object { const val MAX_ADJUSTMENTS = 10 }`
+- [ ] Increment at top of `handleAdjustmentTranscription`
+- [ ] If > MAX: emit `Error("Too many adjustments. Accept or cancel the plan.", canRetry = false)`
+- [ ] Reset in `cancel()` and in `handleTranscription` (new initial plan resets counter)
+
+#### F6: Cancel race condition
+- [ ] In `parseJob` before each `_state.value = ...` assignment: `if (_state.value is DayOrganizerState.Idle) return@launch`
+
+#### F9: Transcription validation
+- [ ] Improve error message in `handleTranscription` empty check
+- [ ] In `handleAdjustmentTranscription` empty check: emit to `_adjustmentErrors` + revert to PlanReady (don't silently drop)
+
+### Step 2: GeminiCaptureRepository.kt changes (F7, F8)
+
+#### F7: Logging
+- [ ] In `HttpGeminiApiClient.generateContent()`: record `attemptStart = System.currentTimeMillis()` per iteration, log elapsed after each attempt
+
+#### F8: Error message distinction
+- [ ] In `doRequest()`: replace generic error message with per-code variants:
+  - 400 → "Invalid request: $sanitized"
+  - 401, 403 → "API key or permission error: $sanitized"
+  - 500, 503 → already `RetryableGeminiException` (add "Server error: " prefix)
+  - other → existing "Gemini request failed ($responseCode): $sanitized"
+
+### Step 3: UI changes (F10, F1 overlay)
+
+#### F10: Haptics in DayOrganizerOverlay.kt + Haptics.kt
+- [ ] Add `ERROR` to `AppHapticPattern` enum in `Haptics.kt`
+- [ ] Add ERROR haptic handling (short double-pulse using `vibrateFallback`)
+- [ ] In `DayOrganizerOverlay`: `val view = LocalView.current`, `val context = LocalContext.current`
+- [ ] `var previousState by remember { mutableStateOf<DayOrganizerState>(DayOrganizerState.Idle) }`
+- [ ] `LaunchedEffect(state)` → fire haptic based on transition: Listening→NAVIGATE, PlanReady→CONFIRM, Error→ERROR, Confirming→Idle (accept complete) → CONFIRM
+- [ ] Update previousState after haptic
+
+#### F1 overlay: PartialSuccess UI
+- [ ] Add `PartialSuccessContent(createdCount, failedCount, onRetryFailed, onCancel)` composable in `DayOrganizerOverlay.kt`
+- [ ] Wire up in `when(state)` block
+- [ ] Add `onRetryFailed: (List<PlanBlock>) -> Unit` param to `DayOrganizerOverlay`
+- [ ] In callers (TaskWallScreen), wire `onRetryFailed` to call `coordinator.retryFailedBlocks(blocks)`
+
+#### F3 overlay: Collect adjustment errors
+- [ ] In the composable calling `DayOrganizerOverlay`, collect `coordinator.adjustmentErrors` in a `LaunchedEffect` and show a snackbar/toast overlay
+
+## Build Verification
+- [ ] `gradlew assembleDebug` after Step 1 (coordinator changes)
+- [ ] `gradlew assembleDebug` after Step 2 (repository changes)
+- [ ] `gradlew assembleDebug` after Step 3 (UI changes) — final build
+
+## Sanity Checks
+- Encoder navigability: `PartialSuccessContent` must be navigable (click = accept, encoder navigation = dismiss). Since this is a wall-mounted device with only 3 encoder inputs, keep actions minimal.
+- Error state `canRetry` semantics are consistent: true = retry same action, false = requires user decision.
+- Adjustment counter resets when initial plan re-generated (new voice session).
+- No UI animations added that violate the "calm, premium, no gamification" philosophy.
+
+## Status
+- [ ] Step 1: DayOrganizerCoordinator.kt — PENDING
+- [ ] Step 2: GeminiCaptureRepository.kt — PENDING
+- [ ] Step 3: UI — PENDING

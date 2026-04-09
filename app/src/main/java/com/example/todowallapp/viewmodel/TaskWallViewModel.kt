@@ -1266,7 +1266,10 @@ class TaskWallViewModel(
                     setTransientMessage("Failed to create events: ${error.message}")
                 }
             )
-            restoreVoicePipelineCallback()
+            // Only restore voice pipeline when coordinator has fully finished (not PartialSuccess)
+            if (dayOrganizerCoordinator.state.value is DayOrganizerState.Idle) {
+                restoreVoicePipelineCallback()
+            }
         }
     }
 
@@ -1286,6 +1289,27 @@ class TaskWallViewModel(
 
     fun setDayOrganizerFocus(index: Int) {
         dayOrganizerCoordinator.setFocusedAction(index)
+    }
+
+    /** Exposes transient adjustment error messages from the coordinator for UI toast display. */
+    val dayOrganizerAdjustmentErrors = dayOrganizerCoordinator.adjustmentErrors
+
+    fun retryFailedDayPlanBlocks(blocks: List<com.example.todowallapp.data.model.PlanBlock>) {
+        viewModelScope.launch {
+            val result = dayOrganizerCoordinator.retryFailedBlocks(blocks)
+            result.fold(
+                onSuccess = { count ->
+                    setTransientMessage("$count additional event${if (count != 1) "s" else ""} created")
+                    loadCalendarRangeInternal(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
+                },
+                onFailure = { error ->
+                    setTransientMessage("Retry failed: ${error.message}")
+                }
+            )
+            if (dayOrganizerCoordinator.state.value is DayOrganizerState.Idle) {
+                restoreVoicePipelineCallback()
+            }
+        }
     }
 
     private fun restoreVoicePipelineCallback() {

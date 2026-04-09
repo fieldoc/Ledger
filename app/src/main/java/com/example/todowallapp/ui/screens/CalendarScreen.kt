@@ -167,6 +167,7 @@ fun CalendarScreen(
     onAdjustDayPlan: () -> Unit = {},
     onCancelDayOrganizer: () -> Unit = {},
     onRetryDayOrganizer: () -> Unit = {},
+    onRetryFailedDayPlanBlocks: (List<com.example.todowallapp.data.model.PlanBlock>) -> Unit = {},
     onDayOrganizerFocusChange: (Int) -> Unit = {},
     voiceStateIdle: Boolean = true,
     hasSeenPlanDayHint: Boolean = true,
@@ -293,20 +294,31 @@ fun CalendarScreen(
                                     2 -> onCancelDayOrganizer()
                                 }
                             }
+                            is DayOrganizerState.PartialSuccess -> {
+                                // Click = retry failed; CW rotated first → dismiss
+                                onRetryFailedDayPlanBlocks(orgState.failedBlocks)
+                            }
                             is DayOrganizerState.Error -> {
                                 if (orgState.canRetry) onRetryDayOrganizer() else onCancelDayOrganizer()
                             }
                             else -> {}
                         }
                     } else if (keyEvent.key in listOf(Key.DirectionRight, Key.DirectionDown)) {
-                        if (orgState is DayOrganizerState.PlanReady) {
-                            val next = (orgState.focusedAction + 1).coerceAtMost(2)
-                            onDayOrganizerFocusChange(next)
+                        when (orgState) {
+                            is DayOrganizerState.PlanReady -> {
+                                val next = (orgState.focusedAction + 1).coerceAtMost(2)
+                                onDayOrganizerFocusChange(next)
+                            }
+                            is DayOrganizerState.PartialSuccess -> onCancelDayOrganizer()
+                            else -> {}
                         }
                     } else if (keyEvent.key in listOf(Key.DirectionLeft, Key.DirectionUp)) {
-                        if (orgState is DayOrganizerState.PlanReady) {
-                            val prev = (orgState.focusedAction - 1).coerceAtLeast(0)
-                            onDayOrganizerFocusChange(prev)
+                        when (orgState) {
+                            is DayOrganizerState.PlanReady -> {
+                                val prev = (orgState.focusedAction - 1).coerceAtLeast(0)
+                                onDayOrganizerFocusChange(prev)
+                            }
+                            else -> {}
                         }
                     }
                     return@onKeyEvent true  // Consume all input when overlay is active
@@ -1171,7 +1183,8 @@ fun CalendarScreen(
             onAccept = onAcceptDayPlan,
             onAdjust = onAdjustDayPlan,
             onCancel = onCancelDayOrganizer,
-            onRetry = onRetryDayOrganizer
+            onRetry = onRetryDayOrganizer,
+            onRetryFailed = onRetryFailedDayPlanBlocks
         )
     } // end outer Box
 

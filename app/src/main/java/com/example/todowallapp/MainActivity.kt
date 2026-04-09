@@ -421,6 +421,12 @@ private fun WallModeContent(
         viewModel.clearPromotionSuccessMessage()
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.dayOrganizerAdjustmentErrors.collect { errorMessage ->
+            Toast.makeText(context, "Adjustment failed: $errorMessage", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val pendingTasksByList = remember(uiState.allTaskLists) {
         uiState.allTaskLists.mapNotNull { listWithTasks ->
             val pending = listWithTasks.tasks.filter { !it.isCompleted }
@@ -659,6 +665,7 @@ private fun WallModeContent(
                         onAdjustDayPlan = { viewModel.adjustDayPlan() },
                         onCancelDayOrganizer = { viewModel.cancelDayOrganizer() },
                         onRetryDayOrganizer = { viewModel.retryDayOrganizer() },
+                        onRetryFailedDayPlanBlocks = { blocks -> viewModel.retryFailedDayPlanBlocks(blocks) },
                         onDayOrganizerFocusChange = { index -> viewModel.setDayOrganizerFocus(index) },
                         voiceStateIdle = voiceState is VoiceInputState.Idle,
                         hasSeenPlanDayHint = hasSeenPlanDayHint,

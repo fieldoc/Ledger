@@ -1270,22 +1270,31 @@ private class HttpGeminiApiClient(
     ): String {
         val retryDelays = listOf(0L, 2000L, 4000L)
         var lastException: Exception? = null
+        val callStart = System.currentTimeMillis()
 
         for (attempt in 0..2) {
             if (retryDelays[attempt] > 0) {
                 Thread.sleep(retryDelays[attempt])
             }
+            val attemptStart = System.currentTimeMillis()
             try {
-                return doRequest(apiKey, requestBody, config)
+                val result = doRequest(apiKey, requestBody, config)
+                val elapsed = System.currentTimeMillis() - attemptStart
+                Log.d(TAG, "Gemini request succeeded on attempt ${attempt + 1}/3 in ${elapsed}ms")
+                return result
             } catch (e: RetryableGeminiException) {
+                val elapsed = System.currentTimeMillis() - attemptStart
                 lastException = e
-                Log.w(TAG, "Gemini request attempt ${attempt + 1}/3 failed (retryable): ${e.message}")
+                Log.w(TAG, "Gemini request attempt ${attempt + 1}/3 failed after ${elapsed}ms (retryable): ${e.message}")
                 if (attempt == 2) break
             } catch (e: Exception) {
-                Log.w(TAG, "Gemini request failed (non-retryable): ${e.message}")
+                val elapsed = System.currentTimeMillis() - attemptStart
+                Log.w(TAG, "Gemini request failed after ${elapsed}ms (non-retryable): ${e.message}")
                 throw e
             }
         }
+        val totalElapsed = System.currentTimeMillis() - callStart
+        Log.e(TAG, "Gemini request failed after all retries (total ${totalElapsed}ms): ${lastException?.message}")
         throw lastException ?: IllegalStateException("Gemini request failed after retries")
     }
 
@@ -1325,10 +1334,13 @@ private class HttpGeminiApiClient(
 
                 val sanitized = sanitizeErrorMessage(errorMessage, apiKey)
 
-                if (responseCode in listOf(429, 500, 503)) {
-                    throw RetryableGeminiException("Gemini request failed ($responseCode): $sanitized")
+                when (responseCode) {
+                    400 -> error("Invalid request to Gemini API: $sanitized")
+                    401, 403 -> error("Gemini API key or permission error: $sanitized")
+                    429, 503 -> throw RetryableGeminiException("Gemini rate limit or unavailable ($responseCode): $sanitized")
+                    500 -> throw RetryableGeminiException("Gemini server error ($responseCode): $sanitized")
+                    else -> error("Gemini request failed ($responseCode): $sanitized")
                 }
-                error("Gemini request failed ($responseCode): $sanitized")
             }
 
             body

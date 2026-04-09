@@ -14,10 +14,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,6 +33,8 @@ import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.data.model.DayPlan
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.ui.theme.LocalWallColors
+import com.example.todowallapp.ui.utils.AppHapticPattern
+import com.example.todowallapp.ui.utils.performAppHaptic
 import java.time.format.DateTimeFormatter
 
 private val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
@@ -38,9 +47,30 @@ fun DayOrganizerOverlay(
     onAdjust: () -> Unit,
     onCancel: () -> Unit,
     onRetry: () -> Unit,
+    onRetryFailed: (List<PlanBlock>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
+    val view = LocalView.current
+    val context = LocalContext.current
+
+    // Track previous state to detect Confirming→Idle (acceptance complete)
+    var previousState by remember { mutableStateOf<DayOrganizerState>(DayOrganizerState.Idle) }
+
+    LaunchedEffect(state) {
+        val prev = previousState
+        when {
+            state is DayOrganizerState.Listening && prev is DayOrganizerState.Idle ->
+                performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
+            state is DayOrganizerState.PlanReady && prev !is DayOrganizerState.PlanReady ->
+                performAppHaptic(view, context, AppHapticPattern.CONFIRM)
+            state is DayOrganizerState.Error ->
+                performAppHaptic(view, context, AppHapticPattern.ERROR)
+            state is DayOrganizerState.Idle && prev is DayOrganizerState.Confirming ->
+                performAppHaptic(view, context, AppHapticPattern.CONFIRM)
+        }
+        previousState = state
+    }
 
     AnimatedVisibility(
         visible = state !is DayOrganizerState.Idle,
@@ -82,6 +112,14 @@ fun DayOrganizerOverlay(
                 }
                 is DayOrganizerState.Confirming -> {
                     ProcessingContent(label = "Creating events...")
+                }
+                is DayOrganizerState.PartialSuccess -> {
+                    PartialSuccessContent(
+                        createdCount = state.createdCount,
+                        failedBlocks = state.failedBlocks,
+                        onRetryFailed = { onRetryFailed(state.failedBlocks) },
+                        onDismiss = onCancel
+                    )
                 }
                 is DayOrganizerState.Error -> {
                     ErrorContent(
@@ -249,6 +287,77 @@ private fun PlanPreviewContent(
                         fontWeight = if (isFocused) FontWeight.SemiBold else FontWeight.Normal
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PartialSuccessContent(
+    createdCount: Int,
+    failedBlocks: List<PlanBlock>,
+    onRetryFailed: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colors = LocalWallColors.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth(0.65f)
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surfaceCard)
+            .border(1.dp, colors.dividerColor, RoundedCornerShape(16.dp))
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Partially Created",
+            color = colors.accentWarm,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "$createdCount event${if (createdCount != 1) "s" else ""} created, ${failedBlocks.size} failed.",
+            color = colors.textPrimary,
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "Failed: ${failedBlocks.joinToString(", ") { it.title }}",
+            color = colors.textMuted,
+            fontSize = 11.sp
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colors.accentPrimary)
+                    .clickable(onClick = onRetryFailed)
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Retry failed",
+                    color = colors.surfaceBlack,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, colors.dividerColor, RoundedCornerShape(8.dp))
+                    .clickable(onClick = onDismiss)
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Dismiss",
+                    color = colors.textMuted,
+                    fontSize = 13.sp
+                )
             }
         }
     }
