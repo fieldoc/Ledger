@@ -25,7 +25,8 @@ data class CalendarEvent(
     val allDayEndDateExclusive: LocalDate? = null,
     val isPromotedTask: Boolean = false,
     val sourceTaskId: String? = null,
-    val htmlLink: String? = null
+    val htmlLink: String? = null,
+    val isDayOrganized: Boolean = false
 )
 
 data class PromotionDraft(

@@ -23,6 +23,8 @@ import com.example.todowallapp.capture.repository.ParsedVoiceResponse
 import com.example.todowallapp.capture.repository.VoiceIntent
 import com.example.todowallapp.data.model.CalendarEvent
 import com.example.todowallapp.data.model.CalendarViewMode
+import com.example.todowallapp.data.model.EnergyProfile
+import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.model.GoogleCalendar
 import com.example.todowallapp.data.model.PromotionAnchor
 import com.example.todowallapp.data.model.PromotionDraft
@@ -54,7 +56,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
@@ -177,6 +181,20 @@ class TaskWallViewModel(
     private val _geminiKeyPresent = MutableStateFlow(geminiKeyStore.hasApiKey())
     val geminiKeyPresent: StateFlow<Boolean> = _geminiKeyPresent.asStateFlow()
 
+    // Plan undo state
+    data class PlanUndoState(val eventCount: Int, val eventIds: List<String>)
+    private val _planUndoState = MutableStateFlow<PlanUndoState?>(null)
+    val planUndoState: StateFlow<PlanUndoState?> = _planUndoState.asStateFlow()
+    private var planUndoTimeoutJob: Job? = null
+
+    // Recently created event IDs (for highlight animation)
+    private val _recentlyCreatedEventIds = MutableStateFlow<Set<String>>(emptySet())
+    val recentlyCreatedEventIds: StateFlow<Set<String>> = _recentlyCreatedEventIds.asStateFlow()
+
+    // Energy profile setting
+    private val _energyProfile = MutableStateFlow(EnergyProfile.BALANCED)
+    val energyProfile: StateFlow<EnergyProfile> = _energyProfile.asStateFlow()
+
     private val _isValidatingGeminiKey = MutableStateFlow(false)
     val isValidatingGeminiKey: StateFlow<Boolean> = _isValidatingGeminiKey.asStateFlow()
 
@@ -198,6 +216,7 @@ class TaskWallViewModel(
     private val lightEndHourKey = intPreferencesKey("light_end_hour")
     private val hasSeenPlanDayHintKey = booleanPreferencesKey("has_seen_plan_day_hint")
     private val geminiGroundingEnabledKey = booleanPreferencesKey("gemini_grounding_enabled")
+    private val energyProfileKey = stringPreferencesKey("energy_profile")
 
     companion object {
         private const val SILENT_SIGN_IN_TIMEOUT_MS = 3_000L
@@ -333,6 +352,9 @@ class TaskWallViewModel(
             _lightEndHour.value = prefs[lightEndHourKey] ?: 19
             _hasSeenPlanDayHint.value = prefs[hasSeenPlanDayHintKey] ?: false
             prefs[geminiGroundingEnabledKey]?.let { _geminiGroundingEnabled.value = it }
+            _energyProfile.value = prefs[energyProfileKey]
+                ?.let { saved -> EnergyProfile.entries.firstOrNull { it.name == saved } }
+                ?: EnergyProfile.BALANCED
 
             val selectedCalendarDate = prefs[selectedCalendarDateKey]
                 ?.let { savedDate -> parseLocalDate(savedDate) }
@@ -1358,7 +1380,8 @@ class TaskWallViewModel(
                         )
                     } else null
                 }
-            } else null
+            } else null,
+            energyProfile = _energyProfile.value
         )
     }
 
@@ -1376,7 +1399,23 @@ class TaskWallViewModel(
             val result = dayOrganizerCoordinator.acceptPlan()
             result.fold(
                 onSuccess = { count ->
-                    setTransientMessage("$count events added to your calendar")
+                    val createdIds = dayOrganizerCoordinator.getLastCreatedEventIds()
+
+                    // Set recently-created IDs for highlight animation (clear after 3s)
+                    _recentlyCreatedEventIds.value = createdIds.toSet()
+                    viewModelScope.launch {
+                        delay(3_000)
+                        _recentlyCreatedEventIds.value = emptySet()
+                    }
+
+                    // Set plan undo state with 8-second timeout
+                    _planUndoState.value = PlanUndoState(eventCount = count, eventIds = createdIds)
+                    planUndoTimeoutJob?.cancel()
+                    planUndoTimeoutJob = viewModelScope.launch {
+                        delay(8_000)
+                        _planUndoState.value = null
+                    }
+
                     loadCalendarRangeInternal(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
                 },
                 onFailure = { error ->
@@ -1388,6 +1427,27 @@ class TaskWallViewModel(
                 restoreVoicePipelineCallback()
             }
         }
+    }
+
+    fun undoPlanAcceptance() {
+        val state = _planUndoState.value ?: return
+        planUndoTimeoutJob?.cancel()
+        _planUndoState.value = null
+        _recentlyCreatedEventIds.value = emptySet()
+        viewModelScope.launch {
+            var deleted = 0
+            for (eventId in state.eventIds) {
+                val result = calendarRepository.deleteEvent(eventId, _uiState.value.selectedCalendarId)
+                if (result.isSuccess) deleted++
+            }
+            setTransientMessage("Removed $deleted event${if (deleted != 1) "s" else ""} from calendar")
+            loadCalendarRangeInternal(_uiState.value.calendarViewMode, _uiState.value.selectedCalendarDate)
+        }
+    }
+
+    fun dismissPlanUndo() {
+        planUndoTimeoutJob?.cancel()
+        _planUndoState.value = null
     }
 
     fun adjustDayPlan() {
@@ -1405,8 +1465,30 @@ class TaskWallViewModel(
     }
 
     fun setDayOrganizerFocus(index: Int) {
-        dayOrganizerCoordinator.setFocusedAction(index)
+        dayOrganizerCoordinator.setFocusedIndex(index)
     }
+
+    fun setPendingRemoveBlock(index: Int?) {
+        dayOrganizerCoordinator.setPendingRemove(index)
+    }
+
+    fun confirmRemoveBlock(index: Int) {
+        dayOrganizerCoordinator.confirmRemoveBlock(index)
+    }
+
+    fun setEnergyProfile(profile: EnergyProfile) {
+        _energyProfile.value = profile
+        viewModelScope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[energyProfileKey] = profile.name
+            }
+        }
+    }
+
+    /** Derived task name lookup from allTaskLists for display in plan preview. */
+    val taskNameById: StateFlow<Map<String, String>> = _uiState.map { state ->
+        state.allTaskLists.flatMap { it.tasks.map { t -> t.id to t.title } }.toMap()
+    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyMap())
 
     /** Exposes transient adjustment error messages from the coordinator for UI toast display. */
     val dayOrganizerAdjustmentErrors = dayOrganizerCoordinator.adjustmentErrors

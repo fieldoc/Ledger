@@ -74,6 +74,8 @@ import com.example.todowallapp.viewmodel.TaskWallViewModel
 import com.example.todowallapp.viewmodel.ThemeMode
 import com.example.todowallapp.viewmodel.UndoAction
 import com.example.todowallapp.capture.DayOrganizerState
+import com.example.todowallapp.data.model.EnergyProfile
+import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -399,6 +401,9 @@ private fun WallModeContent(
     val geminiGroundingEnabled by viewModel.geminiGroundingEnabled.collectAsState()
     val dayOrganizerState by viewModel.dayOrganizerState.collectAsState()
     val hasSeenPlanDayHint by viewModel.hasSeenPlanDayHint.collectAsState()
+    val planUndoState by viewModel.planUndoState.collectAsState()
+    val recentlyCreatedEventIds by viewModel.recentlyCreatedEventIds.collectAsState()
+    val energyProfile by viewModel.energyProfile.collectAsState()
     var weatherApiKeyPresent by remember { mutableStateOf(weatherKeyStore.hasApiKey()) }
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
@@ -581,6 +586,9 @@ private fun WallModeContent(
                         onSetRecurrence = viewModel::setTaskRecurrence,
                         onRemoveRecurrence = viewModel::removeTaskRecurrence,
                         onSkipRecurrence = viewModel::skipRecurrence,
+                        planUndoState = planUndoState,
+                        onUndoPlanAcceptance = { viewModel.undoPlanAcceptance() },
+                        onDismissPlanUndo = { viewModel.dismissPlanUndo() },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -683,6 +691,15 @@ private fun WallModeContent(
                         voiceStateIdle = voiceState is VoiceInputState.Idle,
                         hasSeenPlanDayHint = hasSeenPlanDayHint,
                         onDismissPlanDayHint = viewModel::dismissPlanDayHint,
+                        // Day Organizer block management
+                        onSetPendingRemoveBlock = { viewModel.setPendingRemoveBlock(it) },
+                        onConfirmRemoveBlock = { viewModel.confirmRemoveBlock(it) },
+                        taskNameById = viewModel.taskNameById.collectAsState().value,
+                        planBlocks = (dayOrganizerState as? DayOrganizerState.PlanReady)?.plan?.blocks ?: emptyList(),
+                        recentlyCreatedEventIds = recentlyCreatedEventIds,
+                        // Energy profile for SettingsPanel
+                        energyProfile = energyProfile,
+                        onEnergyProfileChange = { viewModel.setEnergyProfile(it) },
                         modifier = Modifier.fillMaxSize()
                     )
                 }

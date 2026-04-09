@@ -60,6 +60,7 @@ import com.example.todowallapp.ui.theme.LocalWallColors
 import com.example.todowallapp.ui.theme.LedgerTheme
 import com.example.todowallapp.ui.theme.WallAnimations
 import com.example.todowallapp.ui.theme.WallShapes
+import com.example.todowallapp.data.model.EnergyProfile
 import com.example.todowallapp.viewmodel.ThemeMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -73,6 +74,7 @@ private enum class SettingsItemType {
     LIGHT_HOURS,
     SLEEP_SCHEDULE,
     SYNC_INTERVAL,
+    ENERGY_PROFILE,
     GEMINI_KEY,
     WEATHER,
     SEARCH_GROUNDING,
@@ -110,6 +112,8 @@ fun SettingsPanel(
     hasCalendarScope: Boolean = false,
     geminiGroundingEnabled: Boolean = false,
     onGeminiGroundingToggle: (Boolean) -> Unit = {},
+    energyProfile: EnergyProfile = EnergyProfile.BALANCED,
+    onEnergyProfileChange: (EnergyProfile) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
@@ -124,6 +128,7 @@ fun SettingsPanel(
             }
             add(SettingsItemType.SLEEP_SCHEDULE)
             add(SettingsItemType.SYNC_INTERVAL)
+            add(SettingsItemType.ENERGY_PROFILE)
             add(SettingsItemType.GEMINI_KEY)
             add(SettingsItemType.WEATHER)
             if (geminiKeyPresent) {
@@ -184,6 +189,7 @@ fun SettingsPanel(
             if (isEditingValue) "Sleep schedule selected, editing $activeField" else "Sleep schedule selected"
         }
         SettingsItemType.SYNC_INTERVAL -> "Sync interval selected"
+        SettingsItemType.ENERGY_PROFILE -> "Energy profile selected"
         SettingsItemType.GEMINI_KEY -> "Gemini API key selected"
         SettingsItemType.WEATHER -> "Weather settings selected"
         SettingsItemType.SEARCH_GROUNDING -> "Search Grounding selected"
@@ -334,6 +340,7 @@ fun SettingsPanel(
                             }
 
                             SettingsItemType.SYNC_INTERVAL -> adjustSyncInterval(forward = true)
+                            SettingsItemType.ENERGY_PROFILE -> onEnergyProfileChange(energyProfile.next())
                             SettingsItemType.GEMINI_KEY -> { /* touch-only: text field + buttons */ }
                             SettingsItemType.WEATHER -> { /* touch-only: text fields + buttons */ }
                             SettingsItemType.SEARCH_GROUNDING -> onGeminiGroundingToggle(!geminiGroundingEnabled)
@@ -509,6 +516,15 @@ fun SettingsPanel(
                 onClick = { adjustSyncInterval(forward = true) }
             ) {
                 SettingsValuePill(text = "$syncIntervalMinutes min")
+            }
+
+            SettingsItem(
+                label = "Energy Profile",
+                description = "Day planner scheduling bias",
+                isSelected = focusedItem == SettingsItemType.ENERGY_PROFILE,
+                onClick = { onEnergyProfileChange(energyProfile.next()) }
+            ) {
+                SettingsValuePill(text = energyProfile.displayName())
             }
 
             SettingsDivider()

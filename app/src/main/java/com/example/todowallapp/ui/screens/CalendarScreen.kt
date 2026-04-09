@@ -67,6 +67,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.todowallapp.data.model.CalendarEvent
+import com.example.todowallapp.data.model.EnergyProfile
 import com.example.todowallapp.data.model.GoogleCalendar
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskUrgency
@@ -78,6 +79,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import com.example.todowallapp.data.model.CalendarViewMode
+import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.ui.components.Calendar3DayView
 import com.example.todowallapp.ui.components.CalendarDayView
 import com.example.todowallapp.ui.components.SlotDragRange
@@ -187,6 +189,15 @@ fun CalendarScreen(
     voiceStateIdle: Boolean = true,
     hasSeenPlanDayHint: Boolean = true,
     onDismissPlanDayHint: () -> Unit = {},
+    // Day Organizer block management
+    onSetPendingRemoveBlock: (Int?) -> Unit = {},
+    onConfirmRemoveBlock: (Int) -> Unit = {},
+    taskNameById: Map<String, String> = emptyMap(),
+    planBlocks: List<PlanBlock> = emptyList(),
+    recentlyCreatedEventIds: Set<String> = emptySet(),
+    // Energy profile for SettingsPanel
+    energyProfile: EnergyProfile = EnergyProfile.BALANCED,
+    onEnergyProfileChange: (EnergyProfile) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -354,10 +365,20 @@ fun CalendarScreen(
                             is DayOrganizerState.Listening -> onStopDayOrganizerListening()
                             is DayOrganizerState.Adjusting -> onStopDayOrganizerListening()
                             is DayOrganizerState.PlanReady -> {
-                                when (orgState.focusedAction) {
-                                    0 -> onAcceptDayPlan()
-                                    1 -> onAdjustDayPlan()
-                                    2 -> onCancelDayOrganizer()
+                                val blockCount = orgState.plan.blocks.size
+                                val fi = orgState.focusedIndex
+                                when {
+                                    fi < blockCount -> {
+                                        // Focused on a block — click toggles remove
+                                        if (orgState.pendingRemoveIndex == fi) {
+                                            onConfirmRemoveBlock(fi)
+                                        } else {
+                                            onSetPendingRemoveBlock(fi)
+                                        }
+                                    }
+                                    fi == blockCount -> onAcceptDayPlan()
+                                    fi == blockCount + 1 -> onAdjustDayPlan()
+                                    fi == blockCount + 2 -> onCancelDayOrganizer()
                                 }
                             }
                             is DayOrganizerState.PartialSuccess -> {
@@ -372,7 +393,9 @@ fun CalendarScreen(
                     } else if (keyEvent.key in listOf(Key.DirectionRight, Key.DirectionDown)) {
                         when (orgState) {
                             is DayOrganizerState.PlanReady -> {
-                                val next = (orgState.focusedAction + 1).coerceAtMost(2)
+                                onSetPendingRemoveBlock(null)
+                                val maxIndex = orgState.plan.blocks.size + 2 // blocks + 3 action buttons
+                                val next = (orgState.focusedIndex + 1).coerceAtMost(maxIndex)
                                 onDayOrganizerFocusChange(next)
                             }
                             is DayOrganizerState.PartialSuccess -> onCancelDayOrganizer()
@@ -381,7 +404,8 @@ fun CalendarScreen(
                     } else if (keyEvent.key in listOf(Key.DirectionLeft, Key.DirectionUp)) {
                         when (orgState) {
                             is DayOrganizerState.PlanReady -> {
-                                val prev = (orgState.focusedAction - 1).coerceAtLeast(0)
+                                onSetPendingRemoveBlock(null)
+                                val prev = (orgState.focusedIndex - 1).coerceAtLeast(0)
                                 onDayOrganizerFocusChange(prev)
                             }
                             else -> {}
@@ -1108,6 +1132,8 @@ fun CalendarScreen(
                             isWeatherFocused = isWeatherFocused,
                             geminiKeyPresent = geminiKeyPresent,
                             dayOrganizerIdle = dayOrganizerState is DayOrganizerState.Idle,
+                            planBlocks = planBlocks,
+                            recentlyCreatedEventIds = recentlyCreatedEventIds,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -1225,7 +1251,9 @@ fun CalendarScreen(
                 onPlanDay = {
                     startDayOrganizerWithPermission()
                 },
-                hasCalendarScope = hasCalendarScope
+                hasCalendarScope = hasCalendarScope,
+                energyProfile = energyProfile,
+                onEnergyProfileChange = onEnergyProfileChange
             )
         }
 
@@ -1237,7 +1265,10 @@ fun CalendarScreen(
             onAdjust = onAdjustDayPlan,
             onCancel = onCancelDayOrganizer,
             onRetry = onRetryDayOrganizer,
-            onRetryFailed = onRetryFailedDayPlanBlocks
+            onRetryFailed = onRetryFailedDayPlanBlocks,
+            onSetPendingRemove = onSetPendingRemoveBlock,
+            onConfirmRemoveBlock = onConfirmRemoveBlock,
+            taskNameById = taskNameById
         )
 
         // Task voice overlay (when unified voice routes to task action)

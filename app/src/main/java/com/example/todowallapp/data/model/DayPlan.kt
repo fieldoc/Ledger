@@ -23,7 +23,9 @@ data class PlanBlock(
     val existingEventId: String? = null,
     val notes: String? = null,
     val sourceTaskId: String? = null,
-    val sourceTaskListId: String? = null
+    val sourceTaskListId: String? = null,
+    val confidence: Float = 1.0f,
+    val flexibility: Flexibility = Flexibility.FLEXIBLE
 )
 
 enum class BlockCategory {
@@ -32,7 +34,39 @@ enum class BlockCategory {
     ERRAND,
     SOCIAL,
     LEISURE,
-    EXISTING_EVENT
+    EXISTING_EVENT,
+    MEETING,
+    HEALTH,
+    MEAL,
+    BREAK,
+    COMMUTE,
+    DEEP_WORK
+}
+
+enum class Flexibility { RIGID, FLEXIBLE }
+
+enum class EnergyProfile {
+    MORNING_PERSON,
+    NIGHT_OWL,
+    BALANCED;
+
+    fun displayName(): String = when (this) {
+        MORNING_PERSON -> "Morning person"
+        NIGHT_OWL -> "Night owl"
+        BALANCED -> "Balanced"
+    }
+
+    fun next(): EnergyProfile = when (this) {
+        MORNING_PERSON -> NIGHT_OWL
+        NIGHT_OWL -> BALANCED
+        BALANCED -> MORNING_PERSON
+    }
+
+    fun previous(): EnergyProfile = when (this) {
+        MORNING_PERSON -> BALANCED
+        NIGHT_OWL -> MORNING_PERSON
+        BALANCED -> NIGHT_OWL
+    }
 }
 
 class DayPlanValidationException(val errors: List<String>) : Exception(

@@ -282,6 +282,7 @@ class GoogleCalendarRepository(
             ?.getOrNull(1)
             ?.takeIf { it.isNotBlank() }
         val sourceTaskId = taskIdFromExt ?: taskIdFromDescription
+        val isDayOrganized = description?.contains("[Day Organizer]") == true
         return CalendarEvent(
             id = eventId,
             calendarId = calendarId,
@@ -295,7 +296,8 @@ class GoogleCalendarRepository(
             allDayEndDateExclusive = endDateOnly,
             isPromotedTask = sourceTaskId != null,
             sourceTaskId = sourceTaskId,
-            htmlLink = htmlLink
+            htmlLink = htmlLink,
+            isDayOrganized = isDayOrganized
         )
     }
 

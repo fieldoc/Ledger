@@ -7,6 +7,7 @@ import com.example.todowallapp.capture.repository.GeminiCaptureRepository
 import com.example.todowallapp.capture.repository.GeminiPrompt
 import com.google.gson.JsonObject
 import com.example.todowallapp.data.model.DayPlan
+import com.example.todowallapp.data.model.EnergyProfile
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.repository.GoogleCalendarRepository
 import com.example.todowallapp.data.repository.GoogleTasksRepository
@@ -39,9 +40,13 @@ sealed class DayOrganizerState {
     object Idle : DayOrganizerState()
     data class Listening(val amplitudeLevel: Float = 0f) : DayOrganizerState()
     data class Processing(val isAdjustment: Boolean = false) : DayOrganizerState()
-    data class PlanReady(val plan: DayPlan, val focusedAction: Int = 0) : DayOrganizerState()
+    data class PlanReady(
+        val plan: DayPlan,
+        val focusedIndex: Int = 0,
+        val pendingRemoveIndex: Int? = null
+    ) : DayOrganizerState()
     data class Adjusting(val previousPlan: DayPlan, val amplitudeLevel: Float = 0f) : DayOrganizerState()
-    object Confirming : DayOrganizerState()
+    data class Confirming(val current: Int = 0, val total: Int = 0) : DayOrganizerState()
     data class PartialSuccess(val createdCount: Int, val failedBlocks: List<PlanBlock>) : DayOrganizerState()
     data class Error(val message: String, val canRetry: Boolean) : DayOrganizerState()
 }
@@ -95,6 +100,7 @@ class DayOrganizerCoordinator(
     private var wakeHour: Int = 7
     private var sleepHour: Int = 23
     private var focusedListTitle: String? = null
+    private var energyProfile: EnergyProfile = EnergyProfile.BALANCED
 
     companion object {
         private const val GEMINI_TIMEOUT_MS = 60_000L
@@ -115,7 +121,8 @@ class DayOrganizerCoordinator(
         wakeHour: Int = 7,
         sleepHour: Int = 23,
         focusedListTitle: String? = null,
-        groundingContextProvider: (suspend () -> String?)? = null
+        groundingContextProvider: (suspend () -> String?)? = null,
+        energyProfile: EnergyProfile = EnergyProfile.BALANCED
     ) {
         this.scope = scope
         this.listProvider = listProvider
@@ -127,6 +134,7 @@ class DayOrganizerCoordinator(
         this.wakeHour = wakeHour
         this.sleepHour = sleepHour
         this.focusedListTitle = focusedListTitle
+        this.energyProfile = energyProfile
 
         voiceCaptureManager.rawResultCallback = { rawText ->
             handleTranscription(rawText)
@@ -205,16 +213,15 @@ class DayOrganizerCoordinator(
 
     suspend fun acceptPlan(): Result<Int> {
         val plan = currentPlan ?: return Result.failure(IllegalStateException("No plan available"))
-        _state.value = DayOrganizerState.Confirming
+        val newBlocks = plan.blocks.filter { !it.isExistingEvent }
+        _state.value = DayOrganizerState.Confirming(current = 0, total = newBlocks.size)
 
         lastCreatedEventIds.clear()
 
         val succeeded = mutableListOf<PlanBlock>()
         val failed = mutableListOf<PlanBlock>()
 
-        for (block in plan.blocks) {
-            if (block.isExistingEvent) continue
-
+        for (block in newBlocks) {
             val result = calendarRepository.createEvent(
                 title = block.title,
                 startDateTime = block.startTime,
@@ -229,6 +236,11 @@ class DayOrganizerCoordinator(
                     lastCreatedEventIds.add(event.id)
                 },
                 onFailure = { failed.add(block) }
+            )
+            // Emit progress after each attempt
+            _state.value = DayOrganizerState.Confirming(
+                current = succeeded.size + failed.size,
+                total = newBlocks.size
             )
         }
 
@@ -257,7 +269,7 @@ class DayOrganizerCoordinator(
     /** Retry creating only the blocks that failed in a previous acceptPlan() call. */
     suspend fun retryFailedBlocks(blocks: List<PlanBlock>): Result<Int> {
         if (blocks.isEmpty()) return Result.success(0)
-        _state.value = DayOrganizerState.Confirming
+        _state.value = DayOrganizerState.Confirming(current = 0, total = blocks.size)
 
         val succeeded = mutableListOf<PlanBlock>()
         val stillFailed = mutableListOf<PlanBlock>()
@@ -276,6 +288,10 @@ class DayOrganizerCoordinator(
                     lastCreatedEventIds.add(event.id)
                 },
                 onFailure = { stillFailed.add(block) }
+            )
+            _state.value = DayOrganizerState.Confirming(
+                current = succeeded.size + stillFailed.size,
+                total = blocks.size
             )
         }
 
@@ -325,6 +341,7 @@ class DayOrganizerCoordinator(
         weatherProvider = null
         groundingContextProvider = null
         focusedListTitle = null
+        energyProfile = EnergyProfile.BALANCED
         wakeHour = 7
         sleepHour = 23
         _state.value = DayOrganizerState.Idle
@@ -338,11 +355,34 @@ class DayOrganizerCoordinator(
         }
     }
 
-    fun setFocusedAction(index: Int) {
+    fun setFocusedIndex(index: Int) {
         val s = _state.value
         if (s is DayOrganizerState.PlanReady) {
-            _state.value = s.copy(focusedAction = index)
+            _state.value = s.copy(focusedIndex = index)
         }
+    }
+
+    fun setPendingRemove(index: Int?) {
+        val s = _state.value
+        if (s is DayOrganizerState.PlanReady) {
+            _state.value = s.copy(pendingRemoveIndex = index)
+        }
+    }
+
+    fun confirmRemoveBlock(index: Int) {
+        val s = _state.value
+        if (s !is DayOrganizerState.PlanReady) return
+        if (index !in s.plan.blocks.indices) return
+        val newBlocks = s.plan.blocks.toMutableList().also { it.removeAt(index) }
+        val newPlan = s.plan.copy(blocks = newBlocks)
+        currentPlan = newPlan
+        // If the removed block was at or past the end, clamp focus to last block
+        val newFocusIndex = if (s.focusedIndex >= newBlocks.size) newBlocks.size.coerceAtLeast(0) else s.focusedIndex
+        _state.value = s.copy(
+            plan = newPlan,
+            focusedIndex = newFocusIndex,
+            pendingRemoveIndex = null
+        )
     }
 
     // ---------------------------------------------------------------------------
@@ -388,7 +428,8 @@ class DayOrganizerCoordinator(
                     wakeHour = wakeHour,
                     sleepHour = sleepHour,
                     focusedListTitle = focusedListTitle,
-                    groundingContext = grounding
+                    groundingContext = grounding,
+                    energyProfile = energyProfile
                 )
 
                 // Cache system instruction & generation config for multi-turn adjustments

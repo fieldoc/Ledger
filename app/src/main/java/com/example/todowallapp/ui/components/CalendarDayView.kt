@@ -3,6 +3,7 @@ package com.example.todowallapp.ui.components
 import com.example.todowallapp.ui.theme.LocalWallColors
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +32,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.shape.CircleShape
@@ -51,7 +54,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import com.example.todowallapp.data.model.CalendarEvent
+import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.model.TaskUrgency
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.ui.theme.WallAnimations
@@ -263,6 +268,8 @@ fun CalendarDayView(
     isWeatherFocused: Boolean = false,
     geminiKeyPresent: Boolean = false,
     dayOrganizerIdle: Boolean = true,
+    planBlocks: List<PlanBlock> = emptyList(),
+    recentlyCreatedEventIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     val dims = rememberLayoutDimensions()
@@ -463,6 +470,7 @@ fun CalendarDayView(
                         taskUrgencyByTaskId = taskUrgencyByTaskId,
                         now = now,
                         showMorningHint = item.slot.start == morningHintSlotStart,
+                        recentlyCreatedEventIds = recentlyCreatedEventIds,
                         onSlotActivated = onSlotActivated,
                         onEventActivated = onEventActivated
                     )
@@ -479,6 +487,7 @@ fun CalendarDayView(
                         taskListTitleByTaskId = taskListTitleByTaskId,
                         taskUrgencyByTaskId = taskUrgencyByTaskId,
                         now = now,
+                        recentlyCreatedEventIds = recentlyCreatedEventIds,
                         onSlotActivated = onSlotActivated,
                         onEventActivated = onEventActivated
                     )
@@ -522,6 +531,19 @@ fun CalendarDayView(
                 }
             }
         }
+
+        // Ghost plan blocks — translucent preview of planned blocks before acceptance
+        if (planBlocks.isNotEmpty()) {
+            val ghostBlocks = planBlocks.filter { !it.isExistingEvent }
+            if (ghostBlocks.isNotEmpty()) {
+                items(
+                    items = ghostBlocks,
+                    key = { "ghost_${it.title}_${it.startTime}" }
+                ) { block ->
+                    GhostPlanBlockRow(block = block)
+                }
+            }
+        }
     }
 }
 
@@ -535,6 +557,7 @@ private fun CalendarSlotRow(
     taskUrgencyByTaskId: Map<String, TaskUrgency>,
     now: LocalDateTime,
     showMorningHint: Boolean = false,
+    recentlyCreatedEventIds: Set<String> = emptySet(),
     onSlotActivated: (LocalDateTime) -> Unit,
     onEventActivated: (CalendarEvent) -> Unit
 ) {
@@ -635,7 +658,9 @@ private fun CalendarSlotRow(
                                         isSelected = event.id == selectedEventId,
                                         sourceTaskListTitle = event.sourceTaskId?.let(taskListTitleByTaskId::get),
                                         sourceTaskUrgency = event.sourceTaskId?.let(taskUrgencyByTaskId::get),
-                                        onActivated = { onEventActivated(event) }
+                                        onActivated = { onEventActivated(event) },
+                                        isDayOrganized = event.isDayOrganized,
+                                        isRecentlyCreated = event.id in recentlyCreatedEventIds
                                     )
                                 }
                             }
@@ -741,6 +766,7 @@ private fun EventSpanRow(
     taskListTitleByTaskId: Map<String, String>,
     taskUrgencyByTaskId: Map<String, TaskUrgency>,
     now: LocalDateTime,
+    recentlyCreatedEventIds: Set<String> = emptySet(),
     onSlotActivated: (LocalDateTime) -> Unit,
     onEventActivated: (CalendarEvent) -> Unit
 ) {
@@ -805,6 +831,8 @@ private fun EventSpanRow(
                                 sourceTaskListTitle = event.sourceTaskId?.let(taskListTitleByTaskId::get),
                                 sourceTaskUrgency = event.sourceTaskId?.let(taskUrgencyByTaskId::get),
                                 onActivated = { onEventActivated(event) },
+                                isDayOrganized = event.isDayOrganized,
+                                isRecentlyCreated = event.id in recentlyCreatedEventIds,
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxWidth()
@@ -829,6 +857,8 @@ private fun SpanEventCard(
     sourceTaskListTitle: String?,
     sourceTaskUrgency: TaskUrgency?,
     onActivated: () -> Unit,
+    isDayOrganized: Boolean = false,
+    isRecentlyCreated: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
@@ -868,43 +898,70 @@ private fun SpanEventCard(
     }
 
     val cardShape = RoundedCornerShape(8.dp)
-    Row(
-        modifier = modifier
-            .clip(cardShape)
-            .background(bg)
-            .border(1.dp, borderCol, cardShape)
-            .clickable(onClick = onActivated)
-    ) {
-        // Left accent spine
-        Box(
+    Box(modifier = modifier) {
+        Row(
             modifier = Modifier
-                .fillMaxHeight()
-                .width(3.dp)
-                .background(accentColor)
-        )
-        Column(
-            modifier = Modifier
-                .padding(start = 8.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
+                .fillMaxSize()
+                .clip(cardShape)
+                .background(bg)
+                .border(1.dp, borderCol, cardShape)
+                .clickable(onClick = onActivated)
         ) {
-            Text(
-                text = if (!sourceTaskListTitle.isNullOrBlank()) {
-                    "$sourceTaskListTitle \u2013 ${event.title}"
-                } else {
-                    event.title
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = colors.textPrimary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+            // Left accent spine
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(3.dp)
+                    .background(accentColor)
             )
-            if (timeRange != null) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = timeRange,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.textMuted
-                )
+            Column(
+                modifier = Modifier
+                    .padding(start = 8.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isDayOrganized) {
+                        Icon(
+                            imageVector = Icons.Outlined.AutoAwesome,
+                            contentDescription = "Day Organizer",
+                            modifier = Modifier.size(14.dp),
+                            tint = colors.accentPrimary.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = if (!sourceTaskListTitle.isNullOrBlank()) {
+                            "$sourceTaskListTitle \u2013 ${event.title}"
+                        } else {
+                            event.title
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textPrimary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (timeRange != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = timeRange,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textMuted
+                    )
+                }
             }
+        }
+        // Recently-created warm highlight overlay
+        if (isRecentlyCreated) {
+            val highlightAlpha = remember { Animatable(0.35f) }
+            LaunchedEffect(Unit) {
+                highlightAlpha.animateTo(0f, animationSpec = tween(durationMillis = 2000))
+            }
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(cardShape)
+                    .background(colors.accentWarm.copy(alpha = highlightAlpha.value))
+            )
         }
     }
 }
@@ -960,6 +1017,8 @@ private fun EventChip(
     sourceTaskListTitle: String?,
     sourceTaskUrgency: TaskUrgency?,
     onActivated: () -> Unit,
+    isDayOrganized: Boolean = false,
+    isRecentlyCreated: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
@@ -999,43 +1058,111 @@ private fun EventChip(
     }
 
     val chipShape = RoundedCornerShape(6.dp)
+    Box(modifier = modifier) {
+        Row(
+            modifier = Modifier
+                .clip(chipShape)
+                .background(bg)
+                .border(1.dp, borderCol, chipShape)
+                .clickable(onClick = onActivated)
+                .height(IntrinsicSize.Min)
+        ) {
+            // Left accent bar — urgency-colored spine
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(3.dp)
+                    .background(accentColor)
+            )
+
+            Column(
+                modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 5.dp, bottom = 5.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isDayOrganized) {
+                        Icon(
+                            imageVector = Icons.Outlined.AutoAwesome,
+                            contentDescription = "Day Organizer",
+                            modifier = Modifier.size(14.dp),
+                            tint = colors.accentPrimary.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = if (!sourceTaskListTitle.isNullOrBlank()) {
+                            "$sourceTaskListTitle \u2013 ${event.title}"
+                        } else {
+                            event.title
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (timeRange != null) {
+                    Text(
+                        text = timeRange,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textMuted
+                    )
+                }
+            }
+        }
+        if (isRecentlyCreated) {
+            val highlightAlpha = remember { Animatable(0.35f) }
+            LaunchedEffect(Unit) {
+                highlightAlpha.animateTo(0f, animationSpec = tween(durationMillis = 2000))
+            }
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(chipShape)
+                    .background(colors.accentWarm.copy(alpha = highlightAlpha.value))
+            )
+        }
+    }
+}
+
+@Composable
+private fun GhostPlanBlockRow(block: PlanBlock) {
+    val colors = LocalWallColors.current
+    val ghostColor = colors.planAccent
+
     Row(
-        modifier = modifier
-            .clip(chipShape)
-            .background(bg)
-            .border(1.dp, borderCol, chipShape)
-            .clickable(onClick = onActivated)
-            .height(IntrinsicSize.Min)
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 52.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Left accent bar — urgency-colored spine
+        // Left accent bar
         Box(
             modifier = Modifier
-                .fillMaxHeight()
                 .width(3.dp)
-                .background(accentColor)
+                .height(28.dp)
+                .background(ghostColor.copy(alpha = 0.5f))
         )
-
-        Column(
-            modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 5.dp, bottom = 5.dp)
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .background(ghostColor.copy(alpha = 0.08f), RoundedCornerShape(6.dp))
+                .border(1.dp, ghostColor.copy(alpha = 0.25f), RoundedCornerShape(6.dp))
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (!sourceTaskListTitle.isNullOrBlank()) {
-                    "$sourceTaskListTitle \u2013 ${event.title}"
-                } else {
-                    event.title
-                },
+                text = block.startTime.toLocalTime().format(SlotTimeFormatter),
+                style = MaterialTheme.typography.labelSmall,
+                color = ghostColor.copy(alpha = 0.7f)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = block.title,
                 style = MaterialTheme.typography.bodySmall,
-                color = colors.textPrimary,
+                color = ghostColor.copy(alpha = 0.7f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            if (timeRange != null) {
-                Text(
-                    text = timeRange,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.textMuted
-                )
-            }
         }
     }
 }

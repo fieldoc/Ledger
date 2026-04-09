@@ -35,11 +35,12 @@ import com.example.todowallapp.ui.theme.WallShapes
 fun UndoToast(
     visible: Boolean,
     taskTitle: String? = null,
+    overrideMessage: String? = null,
     onUndo: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val message = taskTitle
+    val message = overrideMessage ?: taskTitle
         ?.takeIf { it.isNotBlank() }
         ?.let { "Completed \"$it\"" }
         ?: "Task completed"

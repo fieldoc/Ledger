@@ -5,6 +5,8 @@ import android.util.Log
 import com.example.todowallapp.capture.model.ParsedCapture
 import com.example.todowallapp.data.model.BlockCategory
 import com.example.todowallapp.data.model.DayPlan
+import com.example.todowallapp.data.model.EnergyProfile
+import com.example.todowallapp.data.model.Flexibility
 import com.example.todowallapp.data.model.validated
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.model.RecurrenceFrequency
@@ -134,7 +136,9 @@ class GeminiCaptureRepository(
                       "existingEventId": { "type": "STRING", "nullable": true },
                       "notes": { "type": "STRING", "nullable": true },
                       "sourceTaskId": { "type": "STRING", "nullable": true },
-                      "sourceTaskListId": { "type": "STRING", "nullable": true }
+                      "sourceTaskListId": { "type": "STRING", "nullable": true },
+                      "confidence": { "type": "NUMBER" },
+                      "flexibility": { "type": "STRING" }
                     },
                     "required": ["title", "startTime", "endTime", "category", "isExistingEvent"]
                   }
@@ -495,7 +499,8 @@ class GeminiCaptureRepository(
         wakeHour: Int = 7,
         sleepHour: Int = 23,
         focusedListTitle: String? = null,
-        groundingContext: String? = null
+        groundingContext: String? = null,
+        energyProfile: EnergyProfile = EnergyProfile.BALANCED
     ): GeminiPrompt {
         val wakeTime = String.format("%02d:00", wakeHour)
         val sleepTime = String.format("%02d:00", sleepHour)
@@ -520,21 +525,40 @@ ${if (weatherRule.isNotEmpty()) "12" else "11"}. Weekend scheduling: be more rel
         else """
 ${if (weatherRule.isNotEmpty()) "12" else "11"}. Weekday scheduling: assume the user may have work obligations. Schedule personal tasks around work hours unless told otherwise."""
 
+        val energyCurveRule = when (energyProfile) {
+            EnergyProfile.MORNING_PERSON -> "Energy profile: MORNING PERSON. Schedule ACTIVE/DEEP_WORK tasks during peak hours ($wakeTime–${String.format("%02d:00", noonHour)}), PASSIVE/LEISURE in the evening (after 17:00). HEALTH (exercise) works well in the morning."
+            EnergyProfile.NIGHT_OWL -> "Energy profile: NIGHT OWL. Schedule ACTIVE/DEEP_WORK tasks in the late morning and afternoon (11:00–18:00), PASSIVE tasks in the early morning. HEALTH (exercise) works well in the afternoon or evening."
+            EnergyProfile.BALANCED -> "Energy profile: BALANCED. Schedule ACTIVE/DEEP_WORK tasks during mid-morning to early afternoon ($wakeTime–15:00), PASSIVE/LEISURE in the evening (after 17:00)."
+        }
+
         val systemInstruction = """
 You are a day planning assistant. The user described what they want to accomplish today.
 Produce a time-blocked schedule as a JSON object.
 
 RULES:
 1. NEVER move or modify existing calendar events. Include them in the output with isExistingEvent=true.
-2. Categorize each NEW block: ACTIVE (cognitively demanding), PASSIVE (low-attention, may need proximity), ERRAND (location-based), SOCIAL (calls, meetings), LEISURE (reading, relaxation).
-3. Energy curve: schedule ACTIVE tasks during peak hours ($wakeTime–${String.format("%02d:00", noonHour)}), PASSIVE/LEISURE in the evening (after 17:00). ERRAND blocks should cluster together to minimize travel. Available hours: $wakeTime–$sleepTime.
-4. For PASSIVE tasks with follow-up (e.g., laundry needs changeover), add a notes field and schedule a brief follow-up block at the appropriate time.
-5. Estimate durations reasonably. If the user provided durations, use them. Common defaults: dog walk 30min, run 30-45min, bank 30min, grocery 45min, phone call 20-30min.
-6. If the user mentioned an existing Google Task by name (fuzzy match), set sourceTaskId to the task ID and sourceTaskListId to the list ID. Otherwise leave null. Respect task metadata: HIGH priority tasks should be scheduled earlier; tasks with a preferred time (morning/afternoon/evening) should be placed accordingly.
-7. Leave at least 15 minutes buffer between blocks that require location changes.
-8. Return confidence 0.0-1.0 for the overall plan. If confidence < 0.5, add a "warning" field explaining uncertainty.
-9. The summary should be concise: "N blocks, M new — key insight" (e.g., "8 blocks, 6 new — errands clustered at 1pm").
-10. Do NOT use emoji in titles. Plain text only.$weatherRule$weekendRule
+2. Categorize each NEW block using these categories:
+   - ACTIVE: cognitively demanding work tasks
+   - PASSIVE: low-attention tasks (laundry, waiting)
+   - DEEP_WORK: focused creative/analytical work requiring uninterrupted time (2+ hour blocks preferred)
+   - ERRAND: location-based tasks (bank, grocery, post office)
+   - MEETING: calls, video meetings, in-person meetings
+   - SOCIAL: hangouts, social events
+   - HEALTH: exercise, medical appointments, wellness
+   - MEAL: breakfast, lunch, dinner, cooking
+   - BREAK: rest periods, coffee breaks (schedule every 2-3 hours of continuous work)
+   - COMMUTE: travel time between locations
+   - LEISURE: reading, walks, relaxation
+3. $energyCurveRule ERRAND blocks should cluster together to minimize travel. COMMUTE blocks should buffer location changes. Available hours: $wakeTime–$sleepTime.
+4. MEAL blocks at natural meal windows: breakfast $wakeTime–${String.format("%02d:00", wakeHour + 2)}, lunch 12:00–14:00, dinner 18:00–20:00.
+5. For PASSIVE tasks with follow-up (e.g., laundry needs changeover), add a notes field and schedule a brief follow-up block at the appropriate time.
+6. Estimate durations reasonably. If the user provided durations, use them. Common defaults: dog walk 30min, run 30-45min, bank 30min, grocery 45min, phone call 20-30min.
+7. If the user mentioned an existing Google Task by name (fuzzy match), set sourceTaskId to the task ID and sourceTaskListId to the list ID. Otherwise leave null. Respect task metadata: HIGH priority tasks should be scheduled earlier; tasks with a preferred time (morning/afternoon/evening) should be placed accordingly.
+8. Leave at least 15 minutes buffer between blocks that require location changes. Use COMMUTE category for travel time > 15 minutes.
+9. Return confidence 0.0-1.0 for overall plan AND per-block confidence. Low per-block confidence when: ambiguous duration, unclear categorization, or conflicting constraints.
+10. Set flexibility per block: RIGID for meetings, appointments, and events with fixed times; FLEXIBLE for everything else.
+11. The summary should be concise: "N blocks, M new — key insight" (e.g., "8 blocks, 6 new — errands clustered at 1pm").
+12. Do NOT use emoji in titles. Plain text only.$weatherRule$weekendRule
 
 RESPONSE FORMAT (strict JSON):
 {
@@ -547,12 +571,14 @@ RESPONSE FORMAT (strict JSON):
       "title": "string",
       "startTime": "HH:mm",
       "endTime": "HH:mm",
-      "category": "ACTIVE|PASSIVE|ERRAND|SOCIAL|LEISURE|EXISTING_EVENT",
+      "category": "ACTIVE|PASSIVE|DEEP_WORK|ERRAND|MEETING|SOCIAL|HEALTH|MEAL|BREAK|COMMUTE|LEISURE|EXISTING_EVENT",
       "isExistingEvent": false,
       "existingEventId": null,
       "notes": null,
       "sourceTaskId": null,
-      "sourceTaskListId": null
+      "sourceTaskListId": null,
+      "confidence": 0.0-1.0,
+      "flexibility": "RIGID|FLEXIBLE"
     }
   ]
 }
@@ -639,7 +665,11 @@ USER'S REQUEST:
                 existingEventId = obj.stringValue("existingEventId"),
                 notes = obj.stringValue("notes"),
                 sourceTaskId = obj.stringValue("sourceTaskId"),
-                sourceTaskListId = obj.stringValue("sourceTaskListId")
+                sourceTaskListId = obj.stringValue("sourceTaskListId"),
+                confidence = runCatching { obj.get("confidence")?.asFloat }.getOrNull() ?: 1.0f,
+                flexibility = try {
+                    Flexibility.valueOf(obj.get("flexibility")?.asString ?: "FLEXIBLE")
+                } catch (_: Exception) { Flexibility.FLEXIBLE }
             )
         }
 

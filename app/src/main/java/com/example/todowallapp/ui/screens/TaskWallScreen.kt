@@ -157,6 +157,7 @@ import com.example.todowallapp.ui.utils.AppHapticPattern
 import com.example.todowallapp.ui.utils.performAppHaptic
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
 import com.example.todowallapp.data.model.TaskListWithTasks
+import com.example.todowallapp.viewmodel.TaskWallViewModel
 import com.example.todowallapp.viewmodel.ThemeMode
 import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.capture.repository.VoiceIntent
@@ -330,6 +331,10 @@ fun TaskWallScreen(
     onSetRecurrence: (Task, RecurrenceRule) -> Unit = { _, _ -> },
     onRemoveRecurrence: (Task) -> Unit = {},
     onSkipRecurrence: (Task) -> Unit = {},
+    // Plan undo
+    planUndoState: TaskWallViewModel.PlanUndoState? = null,
+    onUndoPlanAcceptance: () -> Unit = {},
+    onDismissPlanUndo: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1702,6 +1707,17 @@ fun TaskWallScreen(
                 }
             }
         }
+
+        // Plan undo toast — positioned above the task undo toast
+        UndoToast(
+            visible = planUndoState != null,
+            overrideMessage = planUndoState?.let { "Added ${it.eventCount} events to calendar" },
+            onUndo = onUndoPlanAcceptance,
+            onDismiss = onDismissPlanUndo,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 80.dp)
+        )
 
         // Undo toast — bottom-center, above tap-to-wake overlay
         UndoToast(

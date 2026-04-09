@@ -10,7 +10,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -29,11 +29,13 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.data.model.DayPlan
+import com.example.todowallapp.data.model.Flexibility
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.ui.theme.LocalWallColors
 import com.example.todowallapp.ui.utils.AppHapticPattern
@@ -51,13 +53,16 @@ fun DayOrganizerOverlay(
     onCancel: () -> Unit,
     onRetry: () -> Unit,
     onRetryFailed: (List<PlanBlock>) -> Unit = {},
+    onSetPendingRemove: (Int?) -> Unit = {},
+    onConfirmRemoveBlock: (Int) -> Unit = {},
+    taskNameById: Map<String, String> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
     val view = LocalView.current
     val context = LocalContext.current
 
-    // Track previous state to detect Confirming→Idle (acceptance complete)
+    // Track previous state to detect Confirming->Idle (acceptance complete)
     var previousState by remember { mutableStateOf<DayOrganizerState>(DayOrganizerState.Idle) }
 
     LaunchedEffect(state) {
@@ -91,7 +96,7 @@ fun DayOrganizerOverlay(
                     ListeningContent(
                         label = "PLANNING YOUR DAY",
                         hint = "tell me your tasks and how long each will take",
-                        hintExample = "e.g.  groceries 30 min · dentist 1 hour · gym 45 min",
+                        hintExample = "e.g.  groceries 30 min \u00B7 dentist 1 hour \u00B7 gym 45 min",
                         amplitudeLevel = state.amplitudeLevel,
                         onStop = onStopListening
                     )
@@ -109,14 +114,23 @@ fun DayOrganizerOverlay(
                 is DayOrganizerState.PlanReady -> {
                     PlanPreviewContent(
                         plan = state.plan,
-                        focusedAction = state.focusedAction,
+                        focusedIndex = state.focusedIndex,
+                        pendingRemoveIndex = state.pendingRemoveIndex,
+                        taskNameById = taskNameById,
                         onAccept = onAccept,
                         onAdjust = onAdjust,
-                        onCancel = onCancel
+                        onCancel = onCancel,
+                        onSetPendingRemove = onSetPendingRemove,
+                        onConfirmRemoveBlock = onConfirmRemoveBlock
                     )
                 }
                 is DayOrganizerState.Confirming -> {
-                    ProcessingContent(label = "Creating events...")
+                    val label = if (state.current > 0) {
+                        "Creating event ${state.current} of ${state.total}..."
+                    } else {
+                        "Creating events..."
+                    }
+                    ProcessingContent(label = label)
                 }
                 is DayOrganizerState.PartialSuccess -> {
                     PartialSuccessContent(
@@ -177,7 +191,7 @@ private fun ListeningContent(
         )
         Spacer(Modifier.height(16.dp))
 
-        // Contextual hint — fades out after 5s
+        // Contextual hint -- fades out after 5s
         AnimatedVisibility(
             visible = showHint,
             exit = fadeOut(tween(800))
@@ -235,12 +249,17 @@ private fun ProcessingContent(
 @Composable
 private fun PlanPreviewContent(
     plan: DayPlan,
-    focusedAction: Int,
+    focusedIndex: Int,
+    pendingRemoveIndex: Int?,
+    taskNameById: Map<String, String>,
     onAccept: () -> Unit,
     onAdjust: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onSetPendingRemove: (Int?) -> Unit,
+    onConfirmRemoveBlock: (Int) -> Unit
 ) {
     val colors = LocalWallColors.current
+    val blockCount = plan.blocks.size
 
     Column(
         modifier = Modifier
@@ -289,8 +308,24 @@ private fun PlanPreviewContent(
                 .padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items(plan.blocks) { block ->
-                PlanBlockRow(block = block)
+            itemsIndexed(plan.blocks) { index, block ->
+                val isFocused = index == focusedIndex
+                val isPendingRemove = pendingRemoveIndex == index
+                PlanBlockRow(
+                    block = block,
+                    isFocused = isFocused,
+                    isPendingRemove = isPendingRemove,
+                    taskNameById = taskNameById,
+                    onClick = {
+                        if (isFocused) {
+                            if (isPendingRemove) {
+                                onConfirmRemoveBlock(index)
+                            } else {
+                                onSetPendingRemove(index)
+                            }
+                        }
+                    }
+                )
             }
         }
 
@@ -304,7 +339,8 @@ private fun PlanPreviewContent(
         ) {
             val actions = listOf("Accept" to onAccept, "Adjust" to onAdjust, "Cancel" to onCancel)
             actions.forEachIndexed { index, (label, action) ->
-                val isFocused = index == focusedAction
+                val actionIndex = blockCount + index
+                val isFocused = actionIndex == focusedIndex
                 val isAccept = index == 0
                 Box(
                     modifier = Modifier
@@ -408,14 +444,23 @@ private fun PartialSuccessContent(
 }
 
 @Composable
-private fun PlanBlockRow(block: PlanBlock) {
+private fun PlanBlockRow(
+    block: PlanBlock,
+    isFocused: Boolean,
+    isPendingRemove: Boolean,
+    taskNameById: Map<String, String>,
+    onClick: () -> Unit
+) {
     val colors = LocalWallColors.current
     val isExisting = block.isExistingEvent
+    val isLowConfidence = block.confidence < 0.6f
+    val isRigid = block.flexibility == Flexibility.RIGID
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 2.dp),
+            .padding(vertical = 2.dp)
+            .clickable(onClick = onClick),
         verticalAlignment = Alignment.Top
     ) {
         // Time label
@@ -429,55 +474,132 @@ private fun PlanBlockRow(block: PlanBlock) {
         Spacer(Modifier.width(8.dp))
 
         // Block card
-        val borderColor = if (isExisting) colors.dividerColor else colors.planAccent.copy(alpha = 0.4f)
-        val bgColor = if (isExisting) colors.surfaceCard.copy(alpha = 0.5f) else colors.surfaceCard
+        val borderColor = when {
+            isPendingRemove -> colors.accentWarm
+            isFocused && isLowConfidence -> colors.accentWarm.copy(alpha = 0.35f)
+            isFocused -> colors.accentPrimary
+            isExisting -> colors.dividerColor
+            else -> colors.planAccent.copy(alpha = 0.4f)
+        }
+        val bgColor = when {
+            isPendingRemove -> colors.accentWarm.copy(alpha = 0.1f)
+            isFocused -> colors.surfaceCard
+            isExisting -> colors.surfaceCard.copy(alpha = 0.5f)
+            else -> colors.surfaceCard
+        }
 
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(6.dp))
-                .background(bgColor)
-                .then(
-                    if (!isExisting) Modifier.border(1.dp, borderColor, RoundedCornerShape(6.dp))
-                    else Modifier
-                )
-                .padding(start = 0.dp)
-        ) {
-            Row(Modifier.fillMaxWidth()) {
-                // Left accent bar
+        Box(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(bgColor)
+                    .border(
+                        width = if (isFocused || isPendingRemove) 1.5.dp else if (!isExisting) 1.dp else 0.dp,
+                        color = borderColor,
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                    .animateContentSize(animationSpec = tween(250))
+            ) {
+                Row(Modifier.fillMaxWidth()) {
+                    // Left accent bar
+                    Box(
+                        modifier = Modifier
+                            .width(3.dp)
+                            .fillMaxHeight()
+                            .background(
+                                when {
+                                    isLowConfidence -> colors.accentWarm.copy(alpha = 0.35f)
+                                    isExisting -> colors.accentPrimary.copy(alpha = 0.4f)
+                                    else -> colors.planAccent
+                                }
+                            )
+                    )
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        if (isFocused) {
+                            // Expanded: title
+                            Text(
+                                text = block.title,
+                                color = colors.textPrimary.copy(alpha = if (isExisting) 0.6f else 1f),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            // Expanded: time range + category + rigid marker
+                            val timeRange = "${block.startTime.format(timeFmt)} - ${block.endTime.format(timeFmt)}"
+                            val categoryLabel = block.category.name.lowercase()
+                                .replaceFirstChar { it.uppercase() }
+                            val rigidSuffix = if (isRigid) " \u00B7 Fixed" else ""
+                            val lineLabel = if (isExisting) {
+                                "$timeRange  \u00B7  Existing$rigidSuffix"
+                            } else {
+                                "$timeRange  \u00B7  $categoryLabel$rigidSuffix"
+                            }
+                            Text(
+                                text = lineLabel,
+                                color = colors.textMuted.copy(alpha = if (isExisting) 0.4f else 0.6f),
+                                fontSize = 10.sp
+                            )
+                            // Expanded: notes
+                            block.notes?.let { notes ->
+                                Text(
+                                    text = notes,
+                                    color = colors.textMuted.copy(alpha = 0.5f),
+                                    fontSize = 10.sp,
+                                    fontStyle = FontStyle.Italic
+                                )
+                            }
+                            // Expanded: source task name
+                            block.sourceTaskId?.let { taskId ->
+                                val taskName = taskNameById[taskId]
+                                if (taskName != null) {
+                                    Text(
+                                        text = "from: $taskName",
+                                        color = colors.textMuted.copy(alpha = 0.4f),
+                                        fontSize = 10.sp,
+                                        fontStyle = FontStyle.Italic
+                                    )
+                                }
+                            }
+                            // Expanded: low-confidence indicator
+                            if (isLowConfidence) {
+                                Text(
+                                    text = "Low confidence (${(block.confidence * 100).toInt()}%)",
+                                    color = colors.accentWarm.copy(alpha = 0.6f),
+                                    fontSize = 9.sp
+                                )
+                            }
+                        } else {
+                            // Compact (unfocused): title + time only, single line
+                            Text(
+                                text = "${block.title}  ${block.startTime.format(timeFmt)}-${block.endTime.format(timeFmt)}",
+                                color = colors.textPrimary.copy(alpha = if (isExisting) 0.4f else 0.7f),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Pending remove overlay
+            if (isPendingRemove) {
                 Box(
                     modifier = Modifier
-                        .width(3.dp)
-                        .fillMaxHeight()
-                        .background(
-                            if (isExisting) colors.accentPrimary.copy(alpha = 0.4f)
-                            else colors.planAccent
-                        )
-                )
-                Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                        .matchParentSize()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(colors.surfaceBlack.copy(alpha = 0.8f)),
+                    contentAlignment = Alignment.Center
+                ) {
                     Text(
-                        text = block.title,
-                        color = colors.textPrimary.copy(alpha = if (isExisting) 0.6f else 1f),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
+                        text = "Remove? Click to confirm",
+                        color = colors.accentWarm,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
-                    val timeRange = "${block.startTime.format(timeFmt)} - ${block.endTime.format(timeFmt)}"
-                    val categoryLabel = block.category.name.lowercase()
-                        .replaceFirstChar { it.uppercase() }
-                    val lineLabel = if (isExisting) "$timeRange  \u00B7  Existing" else "$timeRange  \u00B7  $categoryLabel"
-                    Text(
-                        text = lineLabel,
-                        color = colors.textMuted.copy(alpha = if (isExisting) 0.4f else 0.6f),
-                        fontSize = 10.sp
-                    )
-                    block.notes?.let { notes ->
-                        Text(
-                            text = notes,
-                            color = colors.textMuted.copy(alpha = 0.5f),
-                            fontSize = 10.sp,
-                            fontStyle = FontStyle.Italic
-                        )
-                    }
                 }
             }
         }
