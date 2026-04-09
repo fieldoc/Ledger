@@ -1,7 +1,8 @@
 # Encoder Input Redesign: Double-Click + Header Voice Button
 
 **Date:** 2026-04-02
-**Status:** Approved
+**Status:** Partially Implemented
+**Remaining:** Voice header button in ClockHeader not fully wired
 
 ## Problem
 

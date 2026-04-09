@@ -2,6 +2,8 @@
 
 **Date:** 2026-04-02
 **Branch:** context-enrichment
+**Status:** Implemented (energy profile, weather, sleep schedule, task metadata all passed to Gemini)
+**Implemented:** 2026-04-09
 **Scope:** Backend-only changes to enrich the Gemini day planner prompt with richer task/event/environment context.
 
 ## Problem

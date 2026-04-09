@@ -1,7 +1,8 @@
 # Microphone Capability Unification
 
 **Date**: 2026-04-07
-**Status**: Design
+**Status**: Implemented (VoiceIntentRouter, unified mic on both screens)
+**Implemented:** 2026-04-09
 
 ## Problem
 

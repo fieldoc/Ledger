@@ -1,6 +1,7 @@
 # Voice Reschedule — Design Spec
 **Date:** 2026-03-28
-**Status:** Approved
+**Status:** Implemented
+**Implemented:** 2026-04-09
 
 ---
 

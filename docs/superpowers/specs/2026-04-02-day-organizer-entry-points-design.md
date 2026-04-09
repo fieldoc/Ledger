@@ -1,7 +1,8 @@
 # Day Organizer Entry Points — Design Spec
 
 **Date:** 2026-04-02
-**Status:** Final
+**Status:** Implemented (entry points all present on CalendarScreen and via unified mic)
+**Implemented:** 2026-04-09
 **Feature:** Make day organizer and voice input reachable from the physical encoder
 
 ---

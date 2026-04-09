@@ -1,6 +1,7 @@
 # Design: Recurring Tasks & Voice Priority
 **Date:** 2026-03-29
-**Status:** Approved
+**Status:** Implemented
+**Implemented:** 2026-04-09
 **Scope:** Two new voice-captured task attributes — recurrence rules and semantic priority — stored via notes-field metadata and surfaced on the wall display.
 
 ---

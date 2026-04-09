@@ -1,6 +1,7 @@
 # Design: Task Management Gaps — Search, Notes, Reorder, Priority, Recurrence
 **Date:** 2026-04-02
-**Status:** Approved
+**Status:** Partially Implemented
+**Remaining:** Manual reordering UI, notes expansion, MEDIUM priority tier in UI
 **Scope:** Five foundational task management features adapted for rotary-encoder-only wall kiosk interaction.
 
 ---

@@ -2,6 +2,7 @@
 
 **Date:** 2026-03-15
 **Status:** Implemented
+**Implemented:** 2026-04-09
 
 ## Problem
 

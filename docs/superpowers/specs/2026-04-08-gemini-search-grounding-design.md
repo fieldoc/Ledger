@@ -2,7 +2,8 @@
 
 **Date:** 2026-04-08  
 **Scope:** Backend only — no new screens, no encoder UX changes  
-**Status:** Experimental / opt-in
+**Status:** Implemented
+**Implemented:** 2026-04-09
 
 ---
 
