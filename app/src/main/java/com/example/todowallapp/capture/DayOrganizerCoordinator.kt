@@ -1,5 +1,6 @@
 package com.example.todowallapp.capture
 
+import android.util.Log
 import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
@@ -11,16 +12,24 @@ import com.example.todowallapp.data.repository.GoogleCalendarRepository
 import com.example.todowallapp.data.repository.GoogleTasksRepository
 import com.example.todowallapp.security.GeminiKeyStore
 import com.example.todowallapp.voice.VoiceCaptureManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.time.LocalDate
 import java.time.LocalTime
+
+private const val TAG = "DayOrganizerCoordinator"
 
 // ---------------------------------------------------------------------------
 // State machine
@@ -33,6 +42,7 @@ sealed class DayOrganizerState {
     data class PlanReady(val plan: DayPlan, val focusedAction: Int = 0) : DayOrganizerState()
     data class Adjusting(val previousPlan: DayPlan, val amplitudeLevel: Float = 0f) : DayOrganizerState()
     object Confirming : DayOrganizerState()
+    data class PartialSuccess(val createdCount: Int, val failedBlocks: List<PlanBlock>) : DayOrganizerState()
     data class Error(val message: String, val canRetry: Boolean) : DayOrganizerState()
 }
 
@@ -50,10 +60,17 @@ class DayOrganizerCoordinator(
     private val _state = MutableStateFlow<DayOrganizerState>(DayOrganizerState.Idle)
     val state: StateFlow<DayOrganizerState> = _state.asStateFlow()
 
+    /** One-shot error events for transient adjustment failures (UI shows toast, plan stays visible). */
+    private val _adjustmentErrors = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val adjustmentErrors: SharedFlow<String> = _adjustmentErrors.asSharedFlow()
+
     var currentPlan: DayPlan? = null
         private set
     var lastTranscription: String? = null
         private set
+
+    /** IDs of calendar events created during the last acceptPlan() — for potential rollback. */
+    private var lastCreatedEventIds: MutableList<String> = mutableListOf()
 
     /** Multi-turn conversation for adjustments: list of (role, text) pairs. */
     private var conversationTurns: MutableList<Pair<String, String>> = mutableListOf()
@@ -61,6 +78,9 @@ class DayOrganizerCoordinator(
     /** Cached system instruction and generation config from initial plan request. */
     private var planSystemInstruction: String? = null
     private var planGenerationConfig: JsonObject? = null
+
+    /** Tracks the number of adjustment attempts for the current plan to prevent infinite loops. */
+    private var adjustmentAttempts = 0
 
     private var parseJob: Job? = null
 
@@ -75,6 +95,11 @@ class DayOrganizerCoordinator(
     private var wakeHour: Int = 7
     private var sleepHour: Int = 23
     private var focusedListTitle: String? = null
+
+    companion object {
+        private const val GEMINI_TIMEOUT_MS = 60_000L
+        private const val MAX_ADJUSTMENT_ATTEMPTS = 10
+    }
 
     // ---------------------------------------------------------------------------
     // Public API
@@ -182,8 +207,10 @@ class DayOrganizerCoordinator(
         val plan = currentPlan ?: return Result.failure(IllegalStateException("No plan available"))
         _state.value = DayOrganizerState.Confirming
 
-        var createdCount = 0
-        val errors = mutableListOf<Throwable>()
+        lastCreatedEventIds.clear()
+
+        val succeeded = mutableListOf<PlanBlock>()
+        val failed = mutableListOf<PlanBlock>()
 
         for (block in plan.blocks) {
             if (block.isExistingEvent) continue
@@ -197,22 +224,85 @@ class DayOrganizerCoordinator(
             )
 
             result.fold(
-                onSuccess = { createdCount++ },
-                onFailure = { errors.add(it) }
+                onSuccess = { event ->
+                    succeeded.add(block)
+                    lastCreatedEventIds.add(event.id)
+                },
+                onFailure = { failed.add(block) }
             )
         }
 
-        return if (errors.isEmpty()) {
-            _state.value = DayOrganizerState.Idle
-            Result.success(createdCount)
-        } else {
-            _state.value = DayOrganizerState.Error(
-                message = "Some events failed to create (${errors.size} error(s)).",
-                canRetry = false
-            )
-            Result.failure(errors.first())
+        return when {
+            failed.isEmpty() -> {
+                _state.value = DayOrganizerState.Idle
+                Result.success(succeeded.size)
+            }
+            succeeded.isEmpty() -> {
+                _state.value = DayOrganizerState.Error(
+                    message = "Failed to create any events (${failed.size} error(s)).",
+                    canRetry = true
+                )
+                Result.failure(IllegalStateException("All event creations failed"))
+            }
+            else -> {
+                _state.value = DayOrganizerState.PartialSuccess(
+                    createdCount = succeeded.size,
+                    failedBlocks = failed
+                )
+                Result.success(succeeded.size)
+            }
         }
     }
+
+    /** Retry creating only the blocks that failed in a previous acceptPlan() call. */
+    suspend fun retryFailedBlocks(blocks: List<PlanBlock>): Result<Int> {
+        if (blocks.isEmpty()) return Result.success(0)
+        _state.value = DayOrganizerState.Confirming
+
+        val succeeded = mutableListOf<PlanBlock>()
+        val stillFailed = mutableListOf<PlanBlock>()
+
+        for (block in blocks) {
+            val result = calendarRepository.createEvent(
+                title = block.title,
+                startDateTime = block.startTime,
+                endDateTime = block.endTime,
+                calendarId = selectedCalendarId,
+                description = buildEventDescription(block)
+            )
+            result.fold(
+                onSuccess = { event ->
+                    succeeded.add(block)
+                    lastCreatedEventIds.add(event.id)
+                },
+                onFailure = { stillFailed.add(block) }
+            )
+        }
+
+        return when {
+            stillFailed.isEmpty() -> {
+                _state.value = DayOrganizerState.Idle
+                Result.success(succeeded.size)
+            }
+            succeeded.isEmpty() -> {
+                _state.value = DayOrganizerState.Error(
+                    message = "Retry failed — ${stillFailed.size} event(s) still couldn't be created.",
+                    canRetry = true
+                )
+                Result.failure(IllegalStateException("All retried event creations failed"))
+            }
+            else -> {
+                _state.value = DayOrganizerState.PartialSuccess(
+                    createdCount = succeeded.size,
+                    failedBlocks = stillFailed
+                )
+                Result.success(succeeded.size)
+            }
+        }
+    }
+
+    /** Returns the IDs of calendar events created during the last acceptPlan() call. */
+    fun getLastCreatedEventIds(): List<String> = lastCreatedEventIds.toList()
 
     fun cancel() {
         parseJob?.cancel()
@@ -225,6 +315,8 @@ class DayOrganizerCoordinator(
         conversationTurns.clear()
         planSystemInstruction = null
         planGenerationConfig = null
+        adjustmentAttempts = 0
+        lastCreatedEventIds.clear()
         // Reset all provider/config state set by startListening()
         scope = null
         listProvider = null
@@ -259,21 +351,23 @@ class DayOrganizerCoordinator(
 
     private fun handleTranscription(rawText: String) {
         val trimmed = rawText.trim()
-        if (trimmed.length < 3) {
+        if (trimmed.isBlank() || trimmed.length < 3) {
             _state.value = DayOrganizerState.Error(
-                message = "I didn't catch that. Click to try again.",
+                message = "Couldn't hear anything — try speaking more clearly.",
                 canRetry = true
             )
             return
         }
 
         lastTranscription = trimmed
+        adjustmentAttempts = 0  // new plan resets the adjustment counter
         _state.value = DayOrganizerState.Processing()
 
         parseJob = scope?.launch {
             try {
                 val apiKey = geminiKeyStore.getApiKey()
                 if (apiKey == null) {
+                    if (_state.value is DayOrganizerState.Idle) return@launch
                     _state.value = DayOrganizerState.Error("Gemini API key not configured.", canRetry = false)
                     return@launch
                 }
@@ -302,8 +396,12 @@ class DayOrganizerCoordinator(
                 planGenerationConfig = prompt.generationConfig
 
                 val responseJson = withContext(Dispatchers.IO) {
-                    geminiCaptureRepository.callGeminiForDayPlan(apiKey, prompt)
+                    withTimeout(GEMINI_TIMEOUT_MS) {
+                        geminiCaptureRepository.callGeminiForDayPlan(apiKey, prompt)
+                    }
                 }
+
+                if (_state.value is DayOrganizerState.Idle) return@launch
 
                 // Initialize conversation history for future adjustments
                 conversationTurns.clear()
@@ -314,7 +412,18 @@ class DayOrganizerCoordinator(
                 currentPlan = plan
                 _state.value = DayOrganizerState.PlanReady(plan = plan)
 
+            } catch (e: TimeoutCancellationException) {
+                if (_state.value is DayOrganizerState.Idle) return@launch
+                Log.w(TAG, "Day plan Gemini call timed out after ${GEMINI_TIMEOUT_MS}ms")
+                _state.value = DayOrganizerState.Error(
+                    message = "Request timed out. Try again.",
+                    canRetry = true
+                )
+            } catch (e: CancellationException) {
+                // Job was cancelled (e.g., user pressed cancel) — don't overwrite state
+                throw e
             } catch (e: Exception) {
+                if (_state.value is DayOrganizerState.Idle) return@launch
                 _state.value = DayOrganizerState.Error(
                     message = e.message ?: "Planning failed. Try again.",
                     canRetry = true
@@ -325,8 +434,18 @@ class DayOrganizerCoordinator(
 
     private fun handleAdjustmentTranscription(rawText: String, previousPlan: DayPlan) {
         val trimmed = rawText.trim()
-        if (trimmed.length < 3) {
+        if (trimmed.isBlank() || trimmed.length < 3) {
+            _adjustmentErrors.tryEmit("Couldn't hear the adjustment — speak clearly and try again.")
             _state.value = DayOrganizerState.PlanReady(plan = previousPlan)
+            return
+        }
+
+        adjustmentAttempts++
+        if (adjustmentAttempts >= MAX_ADJUSTMENT_ATTEMPTS) {
+            _state.value = DayOrganizerState.Error(
+                message = "Too many adjustments. Please accept or cancel the plan.",
+                canRetry = false
+            )
             return
         }
 
@@ -341,6 +460,7 @@ class DayOrganizerCoordinator(
                 val apiKey = geminiKeyStore.getApiKey()
                 if (apiKey == null) {
                     conversationTurns.removeLastOrNull()
+                    if (_state.value is DayOrganizerState.Idle) return@launch
                     _state.value = DayOrganizerState.Error("Gemini API key not configured.", canRetry = false)
                     return@launch
                 }
@@ -349,13 +469,17 @@ class DayOrganizerCoordinator(
                     ?: error("Missing system instruction from initial plan request.")
 
                 val responseJson = withContext(Dispatchers.IO) {
-                    geminiCaptureRepository.callGeminiForDayPlanMultiTurn(
-                        apiKey = apiKey,
-                        systemInstruction = sysInstruction,
-                        turns = conversationTurns.toList(),
-                        generationConfig = planGenerationConfig
-                    )
+                    withTimeout(GEMINI_TIMEOUT_MS) {
+                        geminiCaptureRepository.callGeminiForDayPlanMultiTurn(
+                            apiKey = apiKey,
+                            systemInstruction = sysInstruction,
+                            turns = conversationTurns.toList(),
+                            generationConfig = planGenerationConfig
+                        )
+                    }
                 }
+
+                if (_state.value is DayOrganizerState.Idle) return@launch
 
                 // Store model response for future turns
                 conversationTurns.add("model" to responseJson)
@@ -364,11 +488,23 @@ class DayOrganizerCoordinator(
                 currentPlan = updatedPlan
                 _state.value = DayOrganizerState.PlanReady(plan = updatedPlan)
 
+            } catch (e: TimeoutCancellationException) {
+                if (conversationTurns.lastOrNull() == userTurn) conversationTurns.removeLastOrNull()
+                if (_state.value is DayOrganizerState.Idle) return@launch
+                Log.w(TAG, "Adjustment Gemini call timed out after ${GEMINI_TIMEOUT_MS}ms")
+                _adjustmentErrors.tryEmit("Adjustment timed out. Try again.")
+                _state.value = DayOrganizerState.PlanReady(plan = previousPlan)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 // Remove the failed user turn so conversation stays consistent
                 if (conversationTurns.lastOrNull() == userTurn) {
                     conversationTurns.removeLastOrNull()
                 }
+                if (_state.value is DayOrganizerState.Idle) return@launch
+                val message = e.message ?: "Adjustment failed. Try again."
+                Log.w(TAG, "Adjustment failed: $message")
+                _adjustmentErrors.tryEmit(message)
                 _state.value = DayOrganizerState.PlanReady(plan = previousPlan)
             }
         }

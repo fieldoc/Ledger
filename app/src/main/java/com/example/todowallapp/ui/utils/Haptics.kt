@@ -10,7 +10,8 @@ import android.view.View
 
 enum class AppHapticPattern {
     NAVIGATE,
-    CONFIRM
+    CONFIRM,
+    ERROR
 }
 
 fun performAppHaptic(
@@ -20,13 +21,21 @@ fun performAppHaptic(
 ) {
     val handled = when (pattern) {
         AppHapticPattern.NAVIGATE -> view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-        AppHapticPattern.CONFIRM -> view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+        AppHapticPattern.CONFIRM ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+            else false
+        AppHapticPattern.ERROR ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+                view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+            else false
     }
 
     if (!handled) {
         val durationMs = when (pattern) {
             AppHapticPattern.NAVIGATE -> 12L
             AppHapticPattern.CONFIRM -> 22L
+            AppHapticPattern.ERROR -> 18L
         }
         vibrateFallback(context, durationMs)
     }
