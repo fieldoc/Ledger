@@ -61,8 +61,8 @@ private fun prioritySortRank(priority: TaskPriority): Int = when (priority) {
 
 fun taskDisplayComparator(today: LocalDate = LocalDate.now()): Comparator<Task> {
     return compareBy<Task> { it.isCompleted }
-        .thenBy { prioritySortRank(it.priority) }
         .thenBy { urgencySortRank(it.getUrgencyLevel(today)) }
+        .thenBy { prioritySortRank(it.priority) }
         .thenBy { it.dueDate ?: LocalDate.MAX }
         .thenBy { it.position.ifBlank { "~" } }
         .thenByDescending { it.updatedAt }
