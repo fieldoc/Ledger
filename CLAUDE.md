@@ -4,36 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Workflow & Tool Delegation
 
-To maximize efficiency, delegate tasks to specialized tools based on their strengths:
+Claude handles all tasks — architecture, implementation, research, and review. Codex and Gemini CLI are available as optional accelerators for specific scenarios.
 
-### Claude (You) - Architect & Decision Maker
-**Use for:**
-- Architectural decisions and design choices
-- Code review and approval
-- Breaking down complex requirements
-- Providing technical direction
-- Making implementation strategy decisions
+### Codex - Optional: Code Implementation
+Use when delegating large, self-contained coding tasks non-interactively (e.g. writing a new file, adding a single well-scoped function). See "Using Codex CLI" section for syntax.
 
-**Avoid using Claude for:**
-- Reading large files or multiple files (use Gemini)
-- Writing/implementing code (use Codex)
-- Analyzing entire feature modules (use Gemini)
-
-### Codex - Code Implementation
-**Use for:**
-- All coding and implementation tasks
-- Writing new functions, classes, or components
-- Refactoring existing code
-- Adding tests
-- Making systematic code changes
-
-### Gemini - Code Research & Analysis
-**Use for:**
-- Analyzing large files or entire directories
-- Understanding multi-file interactions
-- Researching how existing features work
-- Code comprehension tasks requiring broad context
-- Verifying architectural patterns across codebase
+### Gemini - Optional: Large-Context Research
+Use when analyzing 5+ files simultaneously or the full codebase in one shot. See "Using Gemini CLI" section for syntax.
 
 ## Project Overview
 
@@ -60,10 +37,10 @@ The app is expanding beyond task display into an **ambient intelligence hub**. C
 |-------|--------|-------------|
 | Task Display | Built | Google Tasks sync, accordion folders, urgency, completion animations |
 | Calendar Integration | Built | Google Calendar sync, month/week/day views, task-to-event promotion |
-| Voice Capture | Built (partial) | SpeechRecognizer + Gemini AI parsing. Wall-mode overlay/draft card still needed. |
+| Voice Capture | Built | SpeechRecognizer + Gemini AI parsing. Waveform overlay, draft card, confirm/cancel all implemented. |
 | Ambient Modes | Built | Two-tier quiet/sleep system with light sensing and schedule |
-| Day Organizer | Planned | Gemini-powered conversational day planning |
-| Weather Awareness | Planned | Forecast tints on calendar, informs scheduling |
+| Day Organizer | Built | Gemini-powered day planning: DayOrganizerCoordinator, DayOrganizerOverlay, per-block UX, undo, sparkle badge |
+| Weather Awareness | Built (partial) | WeatherRepository + WeatherContextStrip exist; calendar forecast tints pending |
 | Community Events | Planned | Local event discovery with preference learning |
 | Habit Tracking | Planned | Gentle streak dots for recurring task patterns |
 | Energy-Aware Ordering | Planned | Circadian task sorting based on user profile |
@@ -247,9 +224,16 @@ gradlew clean
 
 ### MVVM Pattern
 The app follows MVVM (Model-View-ViewModel) architecture with unidirectional data flow:
-- **Model**: Data classes in `data/model/` (Task, TaskList) and repository pattern in `data/repository/`
-- **ViewModel**: `TaskWallViewModel` manages UI state and business logic
+- **Model**: Data classes in `data/model/` (Task, TaskList, DayPlan) and repository pattern in `data/repository/`
+- **ViewModel**: `TaskWallViewModel` (wall mode) and `PhoneCaptureViewModel` (phone mode) manage UI state
 - **View**: Jetpack Compose screens in `ui/screens/` and components in `ui/components/`
+
+### App Modes (WALL vs PHONE)
+The app supports two distinct modes selected at first launch via `ModeSelectorScreen`:
+- **WALL mode**: Immersive kiosk display with encoder navigation (`TaskWallScreen`)
+- **PHONE mode**: Touch-first UI with capture bar and bottom sheets (`PhoneHomeScreen`)
+
+Mode is persisted via `ModePreferenceRepository`. `AppMode.kt` defines the enum. `MainActivity` routes to the correct root screen.
 
 ### Key Architectural Components
 
@@ -300,12 +284,23 @@ The app runs in immersive fullscreen mode configured in `MainActivity`:
 
 ### Voice & AI Capture Pipeline
 - `VoiceCaptureManager` wraps Android `SpeechRecognizer` for on-device speech-to-text
+- `VoiceParsingCoordinator` orchestrates the full voice → Gemini parse → route → commit flow
 - `GeminiCaptureRepository` sends transcriptions to Gemini API for natural language parsing
 - Gemini extracts: task title, due date, target list, parent task, clarification
+- `ListRouting` assigns parsed tasks to the correct Google Tasks list
+- `CaptureCommitOrchestrator` handles the Tasks API write after user confirmation
 - Falls back to raw transcription if Gemini parsing fails
 - Voice input triggered via header voice button (encoder: navigate to button, click)
 - Double-click on a focused task opens context menu (configurable window: DOUBLE_CLICK_WINDOW_MS)
 - Voice overlay (waveform + dim), draft card preview, and confirm/cancel flow are fully implemented
+
+### Day Organizer
+- `DayOrganizerCoordinator` manages an 8-state planning state machine (Idle → Collecting → Generating → PlanReady → Accepted → etc.)
+- `DayPlan` model: list of `PlanBlock`s with 12 categories, per-block confidence + flexibility, `EnergyProfile` setting
+- `DayOrganizerOverlay` renders the conversation UI and per-block encoder-navigable plan preview
+- Accepted plans write events to Google Calendar via `GoogleCalendarRepository`
+- Plan acceptance has 8-second undo (`PlanUndoState`), and sets `isDayOrganized` badge on ClockHeader
+- Ghost blocks render in `CalendarDayView` during plan preview before acceptance
 
 ## Project Structure
 
@@ -315,18 +310,42 @@ app/src/main/java/com/example/todowallapp/
 ├── auth/
 │   └── GoogleAuthManager.kt     # Google Sign-In and auth state
 ├── capture/
-│   └── repository/
-│       └── GeminiCaptureRepository.kt  # Gemini AI voice parsing (NL → structured task)
+│   ├── DayOrganizerCoordinator.kt  # Gemini day planning state machine (8 states)
+│   ├── VoiceParsingCoordinator.kt  # Orchestrates voice → parse → route pipeline
+│   ├── model/
+│   │   └── ParsedCapture.kt        # Structured result from Gemini voice parsing
+│   ├── repository/
+│   │   ├── GeminiCaptureRepository.kt  # Gemini AI voice parsing (NL → structured task)
+│   │   ├── GeminiJsonParser.kt         # JSON extraction from Gemini responses
+│   │   ├── CaptureCommitOrchestrator.kt # Commits parsed captures to Tasks API
+│   │   ├── PendingCaptureStore.kt      # Holds draft captures awaiting confirmation
+│   │   ├── ListRouting.kt              # Assigns captured tasks to correct list
+│   │   └── ScannerRepository.kt        # QR/barcode scanning support
+│   └── router/
+│       └── VoiceIntentRouter.kt        # Routes voice intent to correct handler
 ├── data/
 │   ├── model/
 │   │   ├── Task.kt             # Data models (Task, TaskList, TaskUrgency)
 │   │   ├── CalendarEvent.kt    # Calendar event model
-│   │   └── CalendarViewMode.kt # MONTH / WEEK / DAY enum
+│   │   ├── CalendarViewMode.kt # MONTH / WEEK / DAY enum
+│   │   ├── AppMode.kt          # WALL / PHONE mode enum
+│   │   ├── DayPlan.kt          # Day Organizer plan model (PlanBlock, 12 categories)
+│   │   ├── TaskListWithTasks.kt # Joined model used in Day Organizer context
+│   │   ├── TaskMetadata.kt     # Extended task metadata (energy, recurrence)
+│   │   └── WeatherCondition.kt # Weather data model
 │   └── repository/
 │       ├── GoogleTasksRepository.kt    # Google Tasks API wrapper
-│       └── GoogleCalendarRepository.kt # Google Calendar API wrapper
+│       ├── GoogleCalendarRepository.kt # Google Calendar API wrapper
+│       ├── WeatherRepository.kt        # Open-Meteo weather data fetching
+│       ├── AppPreferences.kt           # DataStore keys and defaults
+│       ├── ModePreferenceRepository.kt # Persists WALL/PHONE mode selection
+│       └── GoogleApiTransportFactory.kt # HTTP transport for Google API clients
+├── security/
+│   ├── GeminiKeyStore.kt       # Encrypted storage for Gemini API key
+│   └── WeatherKeyStore.kt      # Encrypted storage for weather API key
 ├── viewmodel/
-│   └── TaskWallViewModel.kt    # UI state, sync, voice, calendar, settings
+│   ├── TaskWallViewModel.kt    # UI state, sync, voice, calendar, Day Organizer settings (~2461 lines)
+│   └── PhoneCaptureViewModel.kt # Phone-mode capture/task state
 ├── voice/
 │   └── VoiceCaptureManager.kt  # Android SpeechRecognizer wrapper
 ├── util/
@@ -334,18 +353,41 @@ app/src/main/java/com/example/todowallapp/
 │   └── ...
 └── ui/
     ├── components/
-    │   ├── TaskItem.kt         # Task card with completion animation, urgency
-    │   ├── ClockHeader.kt      # Time/date/sync status bar
-    │   ├── SettingsPanel.kt    # Settings overlay (encoder-navigable)
-    │   ├── CalendarMonthView.kt # Month grid with event dots
-    │   ├── CalendarWeekView.kt  # 7-day row view with event chips
+    │   ├── TaskItem.kt             # Task card with completion animation, urgency
+    │   ├── ClockHeader.kt          # Time/date/sync status bar
+    │   ├── SettingsPanel.kt        # Settings overlay (encoder-navigable)
+    │   ├── CalendarMonthView.kt    # Month grid with event dots
+    │   ├── CalendarWeekView.kt     # 7-day row view with event chips
+    │   ├── CalendarDayView.kt      # Hour-slot day view with ghost plan blocks
+    │   ├── Calendar3DayView.kt     # 3-day column view
+    │   ├── DayOrganizerOverlay.kt  # Day Organizer conversation/plan preview UI
+    │   ├── WeatherContextStrip.kt  # Compact weather row for calendar day view
+    │   ├── WeekStrip.kt            # Horizontal week date selector
     │   ├── SharedTaskPrimitives.kt # Checkbox, due date badge, animations
     │   ├── WaveformVisualizer.kt   # Voice input pulse animation
-    │   ├── UndoToast.kt        # Undo completion toast (rendered in TaskWallScreen)
-    │   └── ...
+    │   ├── UndoToast.kt            # Undo completion toast
+    │   ├── ViewSwitcherPill.kt     # Wall/Phone mode switcher pill
+    │   ├── TaskContextMenu.kt      # Double-click context menu (complete/edit/promote)
+    │   ├── TaskDetailOverlay.kt    # Full task detail/edit overlay
+    │   ├── SearchFilterOverlay.kt  # Task search and filter UI
+    │   ├── PromotionSheet.kt       # Task-to-calendar-event promotion flow
+    │   ├── TaskPickerOverlay.kt    # Task selection picker (for Day Organizer)
+    │   ├── RecurrencePickerOverlay.kt # Recurrence rule editor
+    │   ├── EventActionMenu.kt      # Calendar event action menu
+    │   ├── NextActionSpotlight.kt  # Highlights the next suggested action
+    │   ├── PageIndicator.kt        # Page position dots
+    │   ├── PhoneTaskItem.kt        # Phone-mode task row
+    │   ├── PhoneCaptureBar.kt      # Phone-mode voice/text capture bar
+    │   ├── PhoneVoiceBottomSheet.kt # Phone-mode voice input sheet
+    │   ├── PhoneSettingsSheet.kt   # Phone-mode settings sheet
+    │   └── PhoneAccordionSection.kt # Phone-mode accordion task list section
     ├── screens/
-    │   ├── TaskWallScreen.kt   # Main wall display (~1500 lines), focus/nav, ambient
-    │   └── CalendarScreen.kt   # Calendar view with month/week/day modes
+    │   ├── TaskWallScreen.kt   # Main wall display (~2319 lines), focus/nav, ambient
+    │   ├── CalendarScreen.kt   # Calendar view with month/week/day modes
+    │   ├── PhoneHomeScreen.kt  # Phone-mode home (tasks + capture)
+    │   ├── ModeSelectorScreen.kt # WALL/PHONE mode selection on first launch
+    │   ├── ParsedCapturePreviewScreen.kt # Preview captured task before commit
+    │   └── SignInScreen.kt     # Google Sign-In screen
     ├── theme/                  # Material3 theme, WallColors, typography
     └── utils/
         ├── Haptics.kt          # Haptic feedback abstraction
@@ -451,9 +493,7 @@ gemini -m gemini-2.5-flash -p "Your query here"
 
 **Available models:**
 - `gemini-2.5-flash` - **RECOMMENDED** - Best balance of speed and reasoning quality
-- `gemini-2.5-pro` - Deeper reasoning, slower (use for complex architectural analysis)
-- `gemini-2.5-flash-lite` - Fastest, simple tasks only
-- `gemini-3-pro-preview` - Most intelligent, slowest (use sparingly for critical decisions)
+- `gemini-3.1-flash-lite` - Faster, higher rate limits (500 RPD vs 20), use for simple lookups
 
 ### Syntax
 
