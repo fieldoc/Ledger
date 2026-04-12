@@ -15,7 +15,6 @@ import com.example.todowallapp.capture.DayOrganizerCoordinator
 import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.capture.RescheduleRetryContext
 import com.example.todowallapp.capture.VoiceParsingCoordinator
-import com.example.todowallapp.capture.router.VoiceIntentRouter
 import com.example.todowallapp.capture.repository.ExistingListRef
 import com.example.todowallapp.capture.repository.ExistingTaskRef
 import com.example.todowallapp.capture.repository.GeminiCaptureRepository
@@ -231,10 +230,6 @@ class TaskWallViewModel(
     private val isReauthenticating = java.util.concurrent.atomic.AtomicBoolean(false)
     private val signInMutex = Mutex()
     private val inFlightTaskIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-    /** When true, the next voice result gets routed through VoiceIntentRouter before
-     *  forwarding to either VoiceParsingCoordinator or DayOrganizerCoordinator.
-     *  Reset to false after routing completes. Accessed only on main thread. */
-    private var unifiedVoiceRouting = false
 
     private val voiceParsingCoordinator = VoiceParsingCoordinator(
         voiceCaptureManager, geminiCaptureRepository, geminiKeyStore
@@ -242,7 +237,6 @@ class TaskWallViewModel(
 
     private val dayOrganizerCoordinator by lazy {
         DayOrganizerCoordinator(
-            voiceCaptureManager = voiceCaptureManager,
             geminiCaptureRepository = geminiCaptureRepository,
             geminiKeyStore = geminiKeyStore,
             calendarRepository = calendarRepository,
@@ -268,9 +262,7 @@ class TaskWallViewModel(
             }
             android.util.Log.d("GeminiLatency", "[$tag] ${ms}ms")
         }
-        // Configure voice parsing with a routing-aware callback wrapper.
-        // When unifiedVoiceRouting is true, the callback classifies intent first
-        // and may redirect to the day organizer instead of task parsing.
+        // Configure voice parsing — all voice input routes through Gemini intent classification.
         val listProvider = {
             _uiState.value.taskLists.map { list ->
                 ExistingListRef(id = list.id, title = list.title)
@@ -290,25 +282,7 @@ class TaskWallViewModel(
             listIdValidator = ::resolveKnownTaskListId
         )
 
-        // Wrap the rawResultCallback set by configure() with intent routing
-        val taskVoiceCallback = voiceCaptureManager.rawResultCallback
-        voiceCaptureManager.rawResultCallback = { rawText ->
-            if (unifiedVoiceRouting) {
-                unifiedVoiceRouting = false
-                val routed = VoiceIntentRouter.classifyIntent(rawText)
-                when (routed) {
-                    is VoiceIntentRouter.RoutedIntent.TaskAction -> {
-                        taskVoiceCallback?.invoke(rawText)
-                    }
-                    is VoiceIntentRouter.RoutedIntent.DayPlanning -> {
-                        voiceCaptureManager.resetToIdle()
-                        routeToDayOrganizer()
-                    }
-                }
-            } else {
-                taskVoiceCallback?.invoke(rawText)
-            }
-        }
+        refreshDayPlanningContext()
         loadSettings()
         checkAuthState()
         observeConnectivity()
@@ -332,6 +306,37 @@ class TaskWallViewModel(
     }
 
     /**
+     * Re-configure day planning context with current wake/sleep hours.
+     * Called both at init (after defaults are set) and at end of loadSettings()
+     * once persisted hours have been loaded.
+     */
+    private fun refreshDayPlanningContext() {
+        voiceParsingCoordinator.configureDayPlanningContext(
+            calendarEventsProvider = {
+                val today = java.time.LocalDate.now()
+                val events = calendarRepository.getEventsForDateRange(
+                    today, today, _uiState.value.selectedCalendarId
+                ).getOrElse { emptyMap() }
+                events[today]?.map { event ->
+                    if (event.isAllDay) "All day ${event.title} (all-day)"
+                    else {
+                        val start = event.startDateTime?.toLocalTime()
+                        val end = event.endDateTime?.toLocalTime()
+                        val fmt = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+                        val timeRange = "${start?.format(fmt) ?: "?"}-${end?.format(fmt) ?: "?"}"
+                        "$timeRange ${event.title}"
+                    }
+                } ?: emptyList()
+            },
+            weatherSummaryProvider = {
+                _weatherForecast.value[java.time.LocalDate.now()]?.name
+            },
+            wakeHour = _sleepEndHour.value,
+            sleepHour = _sleepStartHour.value
+        )
+    }
+
+    /**
      * Load saved settings from DataStore
      */
     private fun loadSettings() {
@@ -344,6 +349,9 @@ class TaskWallViewModel(
             }
             prefs[sleepStartHourKey]?.let { _sleepStartHour.value = it }
             prefs[sleepEndHourKey]?.let { _sleepEndHour.value = it }
+            // Re-configure day planning context with the persisted wake/sleep hours so
+            // that the coordinator doesn't use the default values baked in at init time.
+            refreshDayPlanningContext()
             prefs[syncIntervalMinutesKey]?.let { _syncIntervalMinutes.value = it }
             _themeMode.value = prefs[themeModeKey]
                 ?.let { savedMode -> ThemeMode.entries.firstOrNull { it.name == savedMode } }
@@ -872,78 +880,7 @@ class TaskWallViewModel(
         }
         voiceParsingCoordinator.cancelParse()
         voiceParsingCoordinator.clearMetadata()
-        unifiedVoiceRouting = true
         voiceCaptureManager.startListening()
-    }
-
-    private fun routeToDayOrganizer() {
-        if (!_uiState.value.hasCalendarScope) {
-            setTransientMessage("Day planning requires calendar access. Grant permission in Settings.")
-            return
-        }
-        if (!geminiKeyStore.hasApiKey()) {
-            setTransientMessage("Day planning requires a Gemini API key. Add one in Settings.")
-            return
-        }
-
-        // Enter day planner listening mode — the trigger phrase ("plan my day")
-        // was just a mode switch, not content. The user will now dictate their
-        // actual tasks/durations for Gemini to schedule.
-        dayOrganizerCoordinator.startListening(
-            scope = viewModelScope,
-            listProvider = {
-                _uiState.value.taskLists.map { list ->
-                    ExistingListRef(id = list.id, title = list.title)
-                }
-            },
-            taskProvider = {
-                _uiState.value.allTaskLists.flatMap { list ->
-                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map { task ->
-                        ExistingTaskRef(
-                            id = task.id,
-                            title = task.title,
-                            listId = list.taskList.id,
-                            listTitle = list.taskList.title,
-                            dueDate = task.dueDate,
-                            priority = task.priority,
-                            preferredTime = task.preferredTime,
-                            recurrenceInfo = task.recurrenceRule?.toHumanReadable()
-                        )
-                    }
-                }.take(40)
-            },
-            eventsProvider = {
-                val today = java.time.LocalDate.now()
-                val events = calendarRepository.getEventsForDateRange(
-                    today, today, _uiState.value.selectedCalendarId
-                ).getOrElse { emptyMap() }
-
-                events[today]?.map { event ->
-                    if (event.isAllDay) {
-                        "All day ${event.title} (all-day)"
-                    } else {
-                        val start = event.startDateTime?.toLocalTime()
-                        val end = event.endDateTime?.toLocalTime()
-                        val timeRange = "${start?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}-${end?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}"
-                        val durationMin = if (start != null && end != null) {
-                            java.time.Duration.between(start, end).toMinutes()
-                        } else null
-                        val durationSuffix = durationMin?.let { " (${it}min)" } ?: ""
-                        "$timeRange ${event.title}$durationSuffix"
-                    }
-                } ?: emptyList()
-            },
-            selectedCalendarId = _uiState.value.selectedCalendarId,
-            weatherProvider = {
-                val todayWeather = _weatherForecast.value[java.time.LocalDate.now()]
-                todayWeather?.name
-            },
-            wakeHour = _sleepEndHour.value,
-            sleepHour = _sleepStartHour.value,
-            focusedListTitle = _uiState.value.selectedTaskListTitle.takeIf {
-                _uiState.value.selectedTaskListId != null
-            }
-        )
     }
 
     fun stopVoiceInput() {
@@ -1200,6 +1137,59 @@ class TaskWallViewModel(
                         )
                     }
                 }
+
+                VoiceIntent.DAY_PLAN -> {
+                    if (!_uiState.value.hasCalendarScope) {
+                        voiceCaptureManager.setError("Day planning requires calendar access. Grant permission in Settings.")
+                        return@launch
+                    }
+                    voiceParsingCoordinator.clearMetadata()
+                    voiceCaptureManager.resetToIdle()
+                    dayOrganizerCoordinator.generatePlan(
+                        transcription = response.rawTranscript,
+                        scope = viewModelScope,
+                        listProvider = {
+                            _uiState.value.taskLists.map { list ->
+                                ExistingListRef(id = list.id, title = list.title)
+                            }
+                        },
+                        taskProvider = {
+                            _uiState.value.allTaskLists.flatMap { list ->
+                                list.tasks.filter { it.parentId == null && !it.isCompleted }.map { task ->
+                                    ExistingTaskRef(
+                                        id = task.id, title = task.title, listId = list.taskList.id,
+                                        listTitle = list.taskList.title, dueDate = task.dueDate,
+                                        priority = task.priority, preferredTime = task.preferredTime,
+                                        recurrenceInfo = task.recurrenceRule?.toHumanReadable()
+                                    )
+                                }
+                            }.take(40)
+                        },
+                        eventsProvider = {
+                            val today = java.time.LocalDate.now()
+                            val events = calendarRepository.getEventsForDateRange(
+                                today, today, _uiState.value.selectedCalendarId
+                            ).getOrElse { emptyMap() }
+                            events[today]?.map { event ->
+                                if (event.isAllDay) "All day ${event.title} (all-day)"
+                                else {
+                                    val start = event.startDateTime?.toLocalTime()
+                                    val end = event.endDateTime?.toLocalTime()
+                                    val fmt = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+                                    "${start?.format(fmt) ?: "?"}-${end?.format(fmt) ?: "?"} ${event.title}"
+                                }
+                            } ?: emptyList()
+                        },
+                        selectedCalendarId = _uiState.value.selectedCalendarId,
+                        weatherProvider = { _weatherForecast.value[java.time.LocalDate.now()]?.name },
+                        wakeHour = _sleepEndHour.value,
+                        sleepHour = _sleepStartHour.value,
+                        focusedListTitle = _uiState.value.selectedTaskListTitle.takeIf {
+                            _uiState.value.selectedTaskListId != null
+                        },
+                        energyProfile = _energyProfile.value
+                    )
+                }
             }
         }
     }
@@ -1310,88 +1300,16 @@ class TaskWallViewModel(
             return
         }
 
-        dayOrganizerCoordinator.startListening(
-            scope = viewModelScope,
-            listProvider = {
-                _uiState.value.taskLists.map { list ->
-                    ExistingListRef(id = list.id, title = list.title)
-                }
-            },
-            taskProvider = {
-                _uiState.value.allTaskLists.flatMap { list ->
-                    list.tasks.filter { it.parentId == null && !it.isCompleted }.map { task ->
-                        ExistingTaskRef(
-                            id = task.id,
-                            title = task.title,
-                            listId = list.taskList.id,
-                            listTitle = list.taskList.title,
-                            dueDate = task.dueDate,
-                            priority = task.priority,
-                            preferredTime = task.preferredTime,
-                            recurrenceInfo = task.recurrenceRule?.toHumanReadable()
-                        )
-                    }
-                }.take(40)
-            },
-            eventsProvider = {
-                val today = java.time.LocalDate.now()
-                val events = calendarRepository.getEventsForDateRange(
-                    today, today, _uiState.value.selectedCalendarId
-                ).getOrElse { emptyMap() }
-
-                events[today]?.map { event ->
-                    if (event.isAllDay) {
-                        "All day ${event.title} (all-day)"
-                    } else {
-                        val start = event.startDateTime?.toLocalTime()
-                        val end = event.endDateTime?.toLocalTime()
-                        val timeRange = "${start?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}-${end?.format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")) ?: "?"}"
-                        val durationMin = if (start != null && end != null) {
-                            java.time.Duration.between(start, end).toMinutes()
-                        } else null
-                        val durationSuffix = durationMin?.let { " (${it}min)" } ?: ""
-                        "$timeRange ${event.title}$durationSuffix"
-                    }
-                } ?: emptyList()
-            },
-            selectedCalendarId = _uiState.value.selectedCalendarId,
-            weatherProvider = {
-                val todayWeather = _weatherForecast.value[java.time.LocalDate.now()]
-                todayWeather?.name // text-only — no emoji to avoid leaking into Gemini titles
-            },
-            wakeHour = _sleepEndHour.value,   // sleep-end = wake-up time
-            sleepHour = _sleepStartHour.value, // sleep-start = bedtime
-            focusedListTitle = _uiState.value.selectedTaskListTitle.takeIf {
-                _uiState.value.selectedTaskListId != null
-            },
-            groundingContextProvider = if (_geminiGroundingEnabled.value && isOnline.value) {
-                {
-                    val apiKey = geminiKeyStore.getApiKey()
-                    val location = try {
-                        WeatherKeyStore(context).getLocation()
-                    } catch (e: Exception) {
-                        null
-                    }
-                    if (apiKey != null) {
-                        geminiCaptureRepository.fetchGroundingContext(
-                            apiKey = apiKey,
-                            location = location,
-                            date = java.time.LocalDate.now()
-                        )
-                    } else null
-                }
-            } else null,
-            energyProfile = _energyProfile.value
-        )
+        // In the new unified pipeline, day planning is triggered via voice:
+        // the user speaks, Gemini classifies the intent as DAY_PLAN, and
+        // confirmVoiceTasks() routes to dayOrganizerCoordinator.generatePlan().
+        startUnifiedVoiceCapture()
     }
 
     fun stopDayOrganizerListening() {
-        val state = dayOrganizerCoordinator.state.value
-        when (state) {
-            is DayOrganizerState.Listening -> dayOrganizerCoordinator.stopListening()
-            is DayOrganizerState.Adjusting -> dayOrganizerCoordinator.stopAdjustmentListening()
-            else -> {}
-        }
+        // Listening/Adjusting states removed in unified pipeline — voice is managed
+        // by VoiceCaptureManager. Stop voice if active.
+        voiceCaptureManager.stopListening()
     }
 
     fun acceptDayPlan() {
@@ -1451,7 +1369,23 @@ class TaskWallViewModel(
     }
 
     fun adjustDayPlan() {
-        dayOrganizerCoordinator.startAdjustment()
+        startDayOrganizerAdjustment()
+    }
+
+    fun startDayOrganizerAdjustment() {
+        val vs = voiceCaptureManager.state.value
+        if (vs is VoiceInputState.Listening || vs is VoiceInputState.Processing) return
+        voiceParsingCoordinator.cancelParse()
+        voiceParsingCoordinator.clearMetadata()
+
+        // Temporarily replace the callback to route to adjustment
+        val originalCallback = voiceCaptureManager.rawResultCallback
+        voiceCaptureManager.rawResultCallback = { rawText ->
+            voiceCaptureManager.rawResultCallback = originalCallback
+            voiceCaptureManager.resetToIdle()
+            dayOrganizerCoordinator.adjustPlan(rawText)
+        }
+        voiceCaptureManager.startListening()
     }
 
     fun cancelDayOrganizer() {

@@ -68,7 +68,7 @@ fun DayOrganizerOverlay(
     LaunchedEffect(state) {
         val prev = previousState
         when {
-            state is DayOrganizerState.Listening && prev is DayOrganizerState.Idle ->
+            state is DayOrganizerState.Processing && prev is DayOrganizerState.Idle ->
                 performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             state is DayOrganizerState.PlanReady && prev !is DayOrganizerState.PlanReady ->
                 performAppHaptic(view, context, AppHapticPattern.CONFIRM)
@@ -92,22 +92,6 @@ fun DayOrganizerOverlay(
             contentAlignment = Alignment.Center
         ) {
             when (state) {
-                is DayOrganizerState.Listening -> {
-                    ListeningContent(
-                        label = "PLANNING YOUR DAY",
-                        hint = "tell me your tasks and how long each will take",
-                        hintExample = "e.g.  groceries 30 min \u00B7 dentist 1 hour \u00B7 gym 45 min",
-                        amplitudeLevel = state.amplitudeLevel,
-                        onStop = onStopListening
-                    )
-                }
-                is DayOrganizerState.Adjusting -> {
-                    ListeningContent(
-                        label = "ADJUSTING PLAN",
-                        amplitudeLevel = state.amplitudeLevel,
-                        onStop = onStopListening
-                    )
-                }
                 is DayOrganizerState.Processing -> {
                     ProcessingContent(isAdjustment = state.isAdjustment)
                 }

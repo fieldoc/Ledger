@@ -362,8 +362,7 @@ fun CalendarScreen(
                 if (orgState !is DayOrganizerState.Idle) {
                     if (keyEvent.key in listOf(Key.Enter, Key.NumPadEnter, Key.Spacebar)) {
                         when (orgState) {
-                            is DayOrganizerState.Listening -> onStopDayOrganizerListening()
-                            is DayOrganizerState.Adjusting -> onStopDayOrganizerListening()
+                            is DayOrganizerState.Processing -> onStopDayOrganizerListening()
                             is DayOrganizerState.PlanReady -> {
                                 val blockCount = orgState.plan.blocks.size
                                 val fi = orgState.focusedIndex
@@ -1329,6 +1328,7 @@ fun CalendarScreen(
                             VoiceIntent.RESCHEDULE -> "Reschedule Task"
                             VoiceIntent.QUERY -> "Tasks Found"
                             VoiceIntent.AMEND -> "Amended Task"
+                            VoiceIntent.DAY_PLAN -> "Plan Day"
                         }
                         Card(
                             modifier = Modifier.fillMaxWidth(0.7f).padding(32.dp),

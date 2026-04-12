@@ -857,7 +857,7 @@ fun TaskWallScreen(
                 if (dayOrganizerState !is DayOrganizerState.Idle) {
                     if (keyEvent.type == KeyEventType.KeyDown) {
                         when (dayOrganizerState) {
-                            is DayOrganizerState.Listening, is DayOrganizerState.Adjusting -> {
+                            is DayOrganizerState.Processing -> {
                                 if (keyEvent.key in CONFIRM_KEYS) {
                                     onStopDayOrganizerListening()
                                 }
@@ -1486,6 +1486,7 @@ fun TaskWallScreen(
                             VoiceIntent.RESCHEDULE -> "Reschedule Task"
                             VoiceIntent.QUERY -> "Tasks Found"
                             VoiceIntent.AMEND -> "Amended Task"
+                            VoiceIntent.DAY_PLAN -> "Plan Day"
                         }
                         Card(
                             modifier = Modifier
@@ -1589,6 +1590,7 @@ fun TaskWallScreen(
                                         VoiceIntent.RESCHEDULE -> "Reschedule"
                                         VoiceIntent.QUERY -> "Dismiss"
                                         VoiceIntent.AMEND -> "Confirm"
+                                        VoiceIntent.DAY_PLAN -> "Confirm"
                                     }
                                     Box(
                                         modifier = Modifier

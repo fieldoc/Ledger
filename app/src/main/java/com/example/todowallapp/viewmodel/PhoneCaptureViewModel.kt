@@ -419,6 +419,13 @@ class PhoneCaptureViewModel(
                         )
                     }
                 }
+
+                VoiceIntent.DAY_PLAN -> {
+                    // Day planning is not supported in phone mode — dismiss and inform user
+                    voiceParsingCoordinator.clearMetadata()
+                    voiceCaptureManager.resetToIdle()
+                    _uiState.value = _uiState.value.copy(showVoiceSheet = false)
+                }
             }
         }
     }
