@@ -44,6 +44,24 @@ class VoiceParsingCoordinator(
     // Non-null when the user tapped Retry on a low-confidence RESCHEDULE preview
     private var rescheduleRetryContext: RescheduleRetryContext? = null
 
+    // Day planning context providers (set by ViewModel)
+    var calendarEventsProvider: (suspend () -> List<String>)? = null
+    var weatherSummaryProvider: (suspend () -> String?)? = null
+    var wakeHour: Int = 7
+    var sleepHour: Int = 23
+
+    fun configureDayPlanningContext(
+        calendarEventsProvider: suspend () -> List<String>,
+        weatherSummaryProvider: (suspend () -> String?)? = null,
+        wakeHour: Int = 7,
+        sleepHour: Int = 23
+    ) {
+        this.calendarEventsProvider = calendarEventsProvider
+        this.weatherSummaryProvider = weatherSummaryProvider
+        this.wakeHour = wakeHour
+        this.sleepHour = sleepHour
+    }
+
     /** Called by ViewModel when user taps Retry on the reschedule preview card. */
     fun armRescheduleRetry(context: RescheduleRetryContext) {
         rescheduleRetryContext = context
@@ -125,13 +143,19 @@ class VoiceParsingCoordinator(
                     )
                 }
             } else {
+                val calEvents = calendarEventsProvider?.invoke() ?: emptyList()
+                val weather = weatherSummaryProvider?.invoke()
                 geminiCaptureRepository.parseVoiceInputV2(
                     apiKey = apiKey,
                     rawText = normalizedText,
                     existingLists = existingLists,
                     existingTasks = existingTasks,
                     todayDate = LocalDate.now(),
-                    currentTime = LocalTime.now()
+                    currentTime = LocalTime.now(),
+                    calendarEvents = calEvents,
+                    weatherSummary = weather,
+                    wakeHour = wakeHour,
+                    sleepHour = sleepHour
                 )
             }
 
