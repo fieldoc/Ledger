@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.todowallapp.capture.repository.VoiceIntent
 import com.example.todowallapp.ui.components.WaveformVisualizer
 import com.example.todowallapp.ui.theme.LocalWallColors
 import com.example.todowallapp.voice.VoiceInputState
@@ -80,7 +81,7 @@ fun PhoneVoiceBottomSheet(
                 text = when (voiceState) {
                     is VoiceInputState.Listening -> "Listening..."
                     VoiceInputState.Processing -> "Thinking..."
-                    is VoiceInputState.Preview -> "Is this right?"
+                    is VoiceInputState.Preview -> if (voiceState.response.intent == VoiceIntent.DAY_PLAN) "Day Plan" else "Is this right?"
                     is VoiceInputState.Error -> "Something went wrong"
                     else -> "Voice Capture"
                 },
@@ -98,7 +99,7 @@ fun PhoneVoiceBottomSheet(
                 when (voiceState) {
                     VoiceInputState.Idle -> {
                         Text(
-                            text = "Speak a task title naturally.",
+                            text = "Speak naturally \u2014 tap Stop when done",
                             style = MaterialTheme.typography.bodyLarge,
                             color = colors.textSecondary,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -119,14 +120,18 @@ fun PhoneVoiceBottomSheet(
 
                     is VoiceInputState.Preview -> {
                         Surface(
-                            color = if (voiceState.clarification != null) 
-                                colors.urgencyDueSoon.copy(alpha = 0.1f) 
+                            color = if (voiceState.response.intent == VoiceIntent.DAY_PLAN)
+                                colors.accentPrimary.copy(alpha = 0.08f)
+                            else if (voiceState.clarification != null)
+                                colors.urgencyDueSoon.copy(alpha = 0.1f)
                             else colors.surfaceCard,
                             shape = RoundedCornerShape(20.dp),
                             border = BorderStroke(
-                                width = 1.dp, 
-                                color = if (voiceState.clarification != null) 
-                                    colors.urgencyDueSoon.copy(alpha = 0.4f) 
+                                width = 1.dp,
+                                color = if (voiceState.response.intent == VoiceIntent.DAY_PLAN)
+                                    colors.accentPrimary.copy(alpha = 0.4f)
+                                else if (voiceState.clarification != null)
+                                    colors.urgencyDueSoon.copy(alpha = 0.4f)
                                 else colors.accentPrimary.copy(alpha = 0.3f)
                             ),
                             modifier = Modifier.fillMaxWidth()
@@ -136,30 +141,47 @@ fun PhoneVoiceBottomSheet(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                val clarificationText = voiceState.clarification
-                                if (clarificationText != null) {
+                                if (voiceState.response.intent == VoiceIntent.DAY_PLAN) {
                                     Text(
-                                        text = clarificationText,
+                                        text = "Day Planning",
                                         style = MaterialTheme.typography.titleMedium,
                                         color = colors.accentPrimary,
                                         fontWeight = FontWeight.Bold,
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                     )
                                     Text(
-                                        text = "\"${voiceState.transcribedText}\"",
+                                        text = "\"${voiceState.response.rawTranscript}\"",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = colors.textSecondary,
                                         fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                     )
                                 } else {
-                                    Text(
-                                        text = voiceState.transcribedText,
-                                        style = MaterialTheme.typography.titleLarge,
-                                        color = colors.textPrimary,
-                                        fontWeight = FontWeight.Medium,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
+                                    val clarificationText = voiceState.clarification
+                                    if (clarificationText != null) {
+                                        Text(
+                                            text = clarificationText,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = colors.accentPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                        Text(
+                                            text = "\"${voiceState.transcribedText}\"",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = colors.textSecondary,
+                                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    } else {
+                                        Text(
+                                            text = voiceState.transcribedText,
+                                            style = MaterialTheme.typography.titleLarge,
+                                            color = colors.textPrimary,
+                                            fontWeight = FontWeight.Medium,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -215,7 +237,7 @@ fun PhoneVoiceBottomSheet(
 
                     is VoiceInputState.Preview -> {
                         ActionPill(
-                            label = "Add Task",
+                            label = if (voiceState.response.intent == VoiceIntent.DAY_PLAN) "Start Planning" else "Add Task",
                             onClick = { onConfirm(null) },
                             primary = true,
                             modifier = Modifier.weight(1f)
