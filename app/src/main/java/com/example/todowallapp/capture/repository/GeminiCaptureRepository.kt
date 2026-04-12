@@ -28,7 +28,7 @@ import java.time.format.DateTimeFormatter
 private const val GEMINI_API_BASE =
     "https://generativelanguage.googleapis.com/v1beta/models"
 
-enum class VoiceIntent { ADD, COMPLETE, RESCHEDULE, DELETE, QUERY, AMEND }
+enum class VoiceIntent { ADD, COMPLETE, RESCHEDULE, DELETE, QUERY, AMEND, DAY_PLAN }
 
 enum class PreferredTime { MORNING, AFTERNOON, EVENING }
 
@@ -399,7 +399,11 @@ class GeminiCaptureRepository(
         existingLists: List<ExistingListRef>,
         existingTasks: List<ExistingTaskRef> = emptyList(),
         todayDate: LocalDate = LocalDate.now(),
-        currentTime: LocalTime = LocalTime.now()
+        currentTime: LocalTime = LocalTime.now(),
+        calendarEvents: List<String> = emptyList(),
+        weatherSummary: String? = null,
+        wakeHour: Int = 7,
+        sleepHour: Int = 23
     ): Result<ParsedVoiceResponse> = withContext(Dispatchers.IO) {
         runCatching {
             val prompt = buildVoiceGeminiPrompt(
@@ -407,7 +411,11 @@ class GeminiCaptureRepository(
                 existingLists = existingLists,
                 existingTasks = existingTasks,
                 todayDate = todayDate,
-                currentTime = currentTime
+                currentTime = currentTime,
+                calendarEvents = calendarEvents,
+                weatherSummary = weatherSummary,
+                wakeHour = wakeHour,
+                sleepHour = sleepHour
             )
             val requestBody = buildRequestBody(prompt)
             val response = apiClient.generateContent(
@@ -898,7 +906,11 @@ Return only JSON.$retryLine
         existingLists: List<ExistingListRef>,
         existingTasks: List<ExistingTaskRef>,
         todayDate: LocalDate,
-        currentTime: LocalTime
+        currentTime: LocalTime,
+        calendarEvents: List<String> = emptyList(),
+        weatherSummary: String? = null,
+        wakeHour: Int = 7,
+        sleepHour: Int = 23
     ): GeminiPrompt {
         val systemInstruction = """
 You are an expert voice-to-task assistant. You convert natural, conversational speech into structured task operations. Users speak casually and verbosely — your job is to extract precise, actionable intent.
@@ -913,6 +925,7 @@ INSTRUCTIONS:
    - "delete" — removing an existing task ("remove X", "delete X", "get rid of X")
    - "query" — asking about tasks ("what's on my list?", "what do I have today?")
    - "amend" — modifying the most recent voice input ("actually make that Friday", "change it to...")
+   - "day_plan" — the user wants to plan, organize, or schedule their day/morning/afternoon/evening. They are describing what they need to do and want you to help arrange it. Examples: "what should I do today", "I need to exercise, have a meeting at 2, and do groceries", "organize my afternoon".
 
    For complete/reschedule/delete: match the spoken description to an existing task by semantic similarity. Set the matching task's ID in the first task item's parentTaskId field (repurposed as "target existing task ID").
 
@@ -1014,7 +1027,7 @@ INSTRUCTIONS:
 8) RESPONSE FORMAT
    Return ONLY strict JSON in this schema:
    {
-     "intent": "add|complete|reschedule|delete|query|amend",
+     "intent": "add|complete|reschedule|delete|query|amend|day_plan",
      "tasks": [
        {
          "title": "string",
@@ -1039,6 +1052,7 @@ INSTRUCTIONS:
 
    For "query" intent, tasks array may be empty.
    For "amend" intent, return the amended version as a single task.
+   For "day_plan" intent, tasks array may be empty — the app will handle day planning separately.
 
 9) RECURRENCE DETECTION
    Detect if the user wants a repeating task. Set recurrence only when the user clearly expresses repetition — not for one-off tasks.
@@ -1098,13 +1112,26 @@ INSTRUCTIONS:
             else -> "evening"
         }
 
+        val dayPlanContext = buildString {
+            if (calendarEvents.isNotEmpty()) {
+                append("\nToday's calendar events:\n")
+                calendarEvents.forEach { event -> append("- $event\n") }
+            }
+            if (weatherSummary != null) {
+                append("\nWeather: $weatherSummary\n")
+            }
+            if (calendarEvents.isNotEmpty() || weatherSummary != null) {
+                append("\nUser wake hour: $wakeHour, sleep hour: $sleepHour\n")
+            }
+        }
+
         val userContent = """
 CURRENT CONTEXT:
 Today: $todayDate (${todayDate.dayOfWeek})
 Current time: $currentTime ($timeOfDay)
 
 Available lists:
-$listContext$taskContext
+$listContext$taskContext$dayPlanContext
 
 INPUT TRANSCRIPT:
 "$rawText"
