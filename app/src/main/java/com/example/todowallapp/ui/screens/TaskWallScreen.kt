@@ -268,7 +268,6 @@ fun TaskWallScreen(
     onDismissVoiceError: () -> Unit = {},
     // Day organizer (routed from unified voice)
     dayOrganizerState: DayOrganizerState = DayOrganizerState.Idle,
-    onStopDayOrganizerListening: () -> Unit = {},
     onAcceptDayPlan: () -> Unit = {},
     onAdjustDayPlan: () -> Unit = {},
     onCancelDayOrganizer: () -> Unit = {},
@@ -858,9 +857,7 @@ fun TaskWallScreen(
                     if (keyEvent.type == KeyEventType.KeyDown) {
                         when (dayOrganizerState) {
                             is DayOrganizerState.Processing -> {
-                                if (keyEvent.key in CONFIRM_KEYS) {
-                                    onStopDayOrganizerListening()
-                                }
+                                // Processing: spinner only, no key actions
                             }
                             is DayOrganizerState.PlanReady -> {
                                 // DayOrganizerOverlay handles its own focus navigation internally
@@ -1663,7 +1660,6 @@ fun TaskWallScreen(
         // Day organizer overlay (when unified voice routes to day planning)
         DayOrganizerOverlay(
             state = dayOrganizerState,
-            onStopListening = onStopDayOrganizerListening,
             onAccept = onAcceptDayPlan,
             onAdjust = onAdjustDayPlan,
             onCancel = onCancelDayOrganizer,

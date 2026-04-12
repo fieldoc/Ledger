@@ -172,7 +172,6 @@ fun CalendarScreen(
     // Day Organizer
     dayOrganizerState: DayOrganizerState = DayOrganizerState.Idle,
     onStartDayOrganizer: () -> Unit = {},
-    onStopDayOrganizerListening: () -> Unit = {},
     onAcceptDayPlan: () -> Unit = {},
     onAdjustDayPlan: () -> Unit = {},
     onCancelDayOrganizer: () -> Unit = {},
@@ -362,7 +361,7 @@ fun CalendarScreen(
                 if (orgState !is DayOrganizerState.Idle) {
                     if (keyEvent.key in listOf(Key.Enter, Key.NumPadEnter, Key.Spacebar)) {
                         when (orgState) {
-                            is DayOrganizerState.Processing -> onStopDayOrganizerListening()
+                            is DayOrganizerState.Processing -> { /* spinner only, no key actions */ }
                             is DayOrganizerState.PlanReady -> {
                                 val blockCount = orgState.plan.blocks.size
                                 val fi = orgState.focusedIndex
@@ -1259,7 +1258,6 @@ fun CalendarScreen(
         // Day Organizer Overlay
         DayOrganizerOverlay(
             state = dayOrganizerState,
-            onStopListening = onStopDayOrganizerListening,
             onAccept = onAcceptDayPlan,
             onAdjust = onAdjustDayPlan,
             onCancel = onCancelDayOrganizer,
