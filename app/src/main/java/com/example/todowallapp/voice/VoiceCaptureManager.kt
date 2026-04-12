@@ -46,8 +46,7 @@ class VoiceCaptureManager(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Continuous mode state
-    private var continuousMode = false
+    // Always-continuous mode state
     private var userRequestedStop = false
     private val accumulatedText = StringBuilder()
     var errorCallback: ((String) -> Unit)? = null
@@ -55,8 +54,14 @@ class VoiceCaptureManager(private val context: Context) {
     // Named listener field so restartRecognizer() can re-attach it
     private var activeListener: RecognitionListener? = null
 
+    // Idle timeout: if no speech detected for 60s, auto-stop
+    private var lastSpeechTimestamp = 0L
+
     private companion object {
         const val LISTENING_TIMEOUT_MS = 120_000L
+        const val IDLE_TIMEOUT_MS = 60_000L
+        const val IDLE_CHECK_INTERVAL_MS = 5_000L
+        const val IDLE_RMS_THRESHOLD = 0.05f
     }
 
     private val timeoutRunnable = Runnable {
@@ -66,7 +71,47 @@ class VoiceCaptureManager(private val context: Context) {
         _state.value = VoiceInputState.Error("Listening timed out")
     }
 
-    private fun buildSpeechIntent(continuous: Boolean): Intent {
+    private val idleCheckRunnable = object : Runnable {
+        override fun run() {
+            val elapsed = System.currentTimeMillis() - lastSpeechTimestamp
+            if (elapsed >= IDLE_TIMEOUT_MS) {
+                // Idle timeout fired
+                deliverAccumulatedText()
+            } else {
+                // Schedule next check
+                mainHandler.postDelayed(this, IDLE_CHECK_INTERVAL_MS)
+            }
+        }
+    }
+
+    /**
+     * Delivers accumulated text as a final result, or silently cancels if nothing
+     * was captured. Used by both idle timeout and explicit stop paths.
+     */
+    private fun deliverAccumulatedText() {
+        mainHandler.removeCallbacks(timeoutRunnable)
+        mainHandler.removeCallbacks(idleCheckRunnable)
+        unmuteBeep()
+        speechRecognizer?.cancel()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+
+        val finalText = accumulatedText.toString().trim()
+        if (finalText.isNotEmpty()) {
+            val callback = rawResultCallback
+            if (callback != null) {
+                _state.value = VoiceInputState.Processing
+                callback(finalText)
+            } else {
+                showPreviewFallback(finalText)
+            }
+        } else {
+            // Nothing captured — silently return to idle
+            _state.value = VoiceInputState.Idle
+        }
+    }
+
+    private fun buildSpeechIntent(): Intent {
         return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(
                 RecognizerIntent.EXTRA_LANGUAGE_MODEL,
@@ -75,17 +120,11 @@ class VoiceCaptureManager(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            if (continuous) {
-                // Moderate silence thresholds — the restart loop in onResults handles
-                // real continuity, and onEndOfSpeech stays in Listening state so the
-                // user sees no interruption. These just control when each segment ends.
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4_000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 6_000L)
-            } else {
-                // Original generous thresholds for single-utterance mode
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 5000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 4000L)
-            }
+            // Set silence thresholds very high so Android never triggers end-of-speech
+            // before our own idle timeout. The app controls when to stop via tap-to-stop
+            // or the 60-second idle check.
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 59_000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 59_000L)
         }
     }
 
@@ -124,13 +163,13 @@ class VoiceCaptureManager(private val context: Context) {
         newRecognizer.setRecognitionListener(activeListener ?: return)
         speechRecognizer?.destroy()
         speechRecognizer = newRecognizer
-        newRecognizer.startListening(buildSpeechIntent(continuous = true))
+        newRecognizer.startListening(buildSpeechIntent())
         mainHandler.postDelayed(timeoutRunnable, LISTENING_TIMEOUT_MS)
         // Unmute after a short delay to let the start chime pass
         mainHandler.postDelayed({ unmuteBeep() }, 500)
     }
 
-    fun startListening(continuous: Boolean = false) {
+    fun startListening() {
         if (_state.value is VoiceInputState.Listening || _state.value is VoiceInputState.Processing) {
             return
         }
@@ -140,15 +179,14 @@ class VoiceCaptureManager(private val context: Context) {
         }
 
         mainHandler.post {
-            // Initialize continuous mode state on the main thread so listener callbacks
+            // Initialize state on the main thread so listener callbacks
             // reading these fields are always on the same thread.
-            continuousMode = continuous
             userRequestedStop = false
             accumulatedText.clear()
+            lastSpeechTimestamp = System.currentTimeMillis()
 
-            // Mute the music stream in continuous mode to suppress Android's
-            // recognizer start chime — the user should hear nothing during listening.
-            if (continuous) muteBeep()
+            // Mute the music stream to suppress Android's recognizer start chime
+            muteBeep()
 
             speechRecognizer?.destroy()
             speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
@@ -172,6 +210,10 @@ class VoiceCaptureManager(private val context: Context) {
                     // Normalize RMS to 0-1 range (typical RMS range is -2 to 10).
                     val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
                     currentAmplitude = normalized
+                    // Track speech activity for idle timeout
+                    if (normalized > IDLE_RMS_THRESHOLD) {
+                        lastSpeechTimestamp = System.currentTimeMillis()
+                    }
                     _state.value = VoiceInputState.Listening(
                         amplitudeLevel = currentAmplitude,
                         partialText = latestPartial
@@ -181,10 +223,9 @@ class VoiceCaptureManager(private val context: Context) {
                 override fun onBufferReceived(buffer: ByteArray?) {}
 
                 override fun onEndOfSpeech() {
-                    if (continuousMode && !userRequestedStop) {
-                        // Stay in Listening state — the restart in onResults will
-                        // seamlessly continue. Don't flip to Processing or the UI
-                        // will flash a spinner and signal "done" to the user.
+                    // Always stay in Listening unless user tapped stop —
+                    // the restart in onResults will seamlessly continue.
+                    if (!userRequestedStop) {
                         return
                     }
                     _state.value = VoiceInputState.Processing
@@ -192,6 +233,7 @@ class VoiceCaptureManager(private val context: Context) {
 
                 override fun onError(error: Int) {
                     mainHandler.removeCallbacks(timeoutRunnable)
+                    mainHandler.removeCallbacks(idleCheckRunnable)
                     val message = when (error) {
                         SpeechRecognizer.ERROR_NO_MATCH -> "Didn't catch that"
                         SpeechRecognizer.ERROR_NETWORK -> "Network error (code 2)"
@@ -206,12 +248,12 @@ class VoiceCaptureManager(private val context: Context) {
                     speechRecognizer?.destroy()
                     speechRecognizer = null
 
-                    // In continuous mode, a silence/no-match error mid-session means the user
-                    // paused long enough to trigger a timeout. If we already have accumulated text,
-                    // deliver it rather than discarding it and showing an error.
+                    // A silence/no-match error mid-session means the user paused long
+                    // enough to trigger Android's timeout. If we already have accumulated
+                    // text, deliver it rather than discarding it and showing an error.
                     val isSilenceError = error == SpeechRecognizer.ERROR_NO_MATCH ||
                             error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-                    if (continuousMode && isSilenceError && accumulatedText.isNotEmpty()) {
+                    if (isSilenceError && accumulatedText.isNotEmpty()) {
                         unmuteBeep()
                         val finalText = accumulatedText.toString().trim()
                         val callback = rawResultCallback
@@ -224,7 +266,7 @@ class VoiceCaptureManager(private val context: Context) {
                         return
                     }
 
-                    if (continuousMode) unmuteBeep()
+                    unmuteBeep()
 
                     errorCallback?.invoke(message)
                     _state.value = VoiceInputState.Error(message)
@@ -235,55 +277,36 @@ class VoiceCaptureManager(private val context: Context) {
                     val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     val text = matches?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
 
-                    if (continuousMode) {
-                        // Buffer this segment's text
-                        if (text != null) {
-                            if (accumulatedText.isNotEmpty()) accumulatedText.append(" ")
-                            accumulatedText.append(text)
-                        }
-                        if (userRequestedStop) {
-                            // Deliver final accumulated result
-                            val finalText = accumulatedText.toString().trim()
-                            if (finalText.isNotEmpty()) {
-                                val callback = rawResultCallback
-                                if (callback != null) {
-                                    _state.value = VoiceInputState.Processing
-                                    callback(finalText)
-                                } else {
-                                    showPreviewFallback(finalText)
-                                }
-                            } else {
-                                _state.value = VoiceInputState.Error("Didn't catch that")
-                            }
-                        } else {
-                            // Not stopped yet. Only restart if we got something this segment or
-                            // have already accumulated text (user is pausing mid-utterance).
-                            // If both are empty the recognizer delivered silence with no speech —
-                            // restart would loop forever, so treat it as a no-speech error instead.
-                            if (text != null || accumulatedText.isNotEmpty()) {
-                                _state.value = VoiceInputState.Listening(
-                                    amplitudeLevel = 0f,
-                                    partialText = accumulatedText.toString().ifEmpty { null }
-                                )
-                                restartRecognizer()
-                            } else {
-                                errorCallback?.invoke("No speech detected")
-                                _state.value = VoiceInputState.Error("No speech detected")
-                            }
-                        }
-                    } else {
-                        // Original non-continuous behavior
-                        if (text != null) {
+                    // Buffer this segment's text
+                    if (text != null) {
+                        if (accumulatedText.isNotEmpty()) accumulatedText.append(" ")
+                        accumulatedText.append(text)
+                    }
+                    if (userRequestedStop) {
+                        // Deliver final accumulated result
+                        mainHandler.removeCallbacks(idleCheckRunnable)
+                        val finalText = accumulatedText.toString().trim()
+                        if (finalText.isNotEmpty()) {
                             val callback = rawResultCallback
                             if (callback != null) {
                                 _state.value = VoiceInputState.Processing
-                                callback(text)
+                                callback(finalText)
                             } else {
-                                showPreviewFallback(text)
+                                showPreviewFallback(finalText)
                             }
                         } else {
                             _state.value = VoiceInputState.Error("Didn't catch that")
                         }
+                    } else {
+                        // Not stopped yet. Restart recognizer to keep listening.
+                        // If we got text OR already have accumulation, keep going.
+                        // If both are empty, restart anyway (keep waiting for speech)
+                        // rather than erroring — the idle timeout will handle true silence.
+                        _state.value = VoiceInputState.Listening(
+                            amplitudeLevel = 0f,
+                            partialText = accumulatedText.toString().ifEmpty { null }
+                        )
+                        restartRecognizer()
                     }
                 }
 
@@ -294,6 +317,10 @@ class VoiceCaptureManager(private val context: Context) {
                         ?.trim()
                         ?.takeIf { it.isNotEmpty() }
                     latestPartial = partial
+                    // Track speech activity for idle timeout
+                    if (partial != null) {
+                        lastSpeechTimestamp = System.currentTimeMillis()
+                    }
                     _state.value = VoiceInputState.Listening(
                         amplitudeLevel = currentAmplitude,
                         partialText = latestPartial
@@ -304,22 +331,24 @@ class VoiceCaptureManager(private val context: Context) {
             }
 
             speechRecognizer?.setRecognitionListener(activeListener)
-            speechRecognizer?.startListening(buildSpeechIntent(continuous))
+            speechRecognizer?.startListening(buildSpeechIntent())
             mainHandler.postDelayed(timeoutRunnable, LISTENING_TIMEOUT_MS)
+            // Start idle check polling
+            mainHandler.postDelayed(idleCheckRunnable, IDLE_CHECK_INTERVAL_MS)
         }
     }
 
     fun stopListening() {
-        if (continuousMode) {
-            userRequestedStop = true
-            unmuteBeep()
-        }
+        userRequestedStop = true
+        unmuteBeep()
+        mainHandler.removeCallbacks(idleCheckRunnable)
         speechRecognizer?.stopListening()
     }
 
     fun cancel() {
         mainHandler.removeCallbacks(timeoutRunnable)
-        if (continuousMode) unmuteBeep()
+        mainHandler.removeCallbacks(idleCheckRunnable)
+        unmuteBeep()
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
         speechRecognizer = null
@@ -364,6 +393,7 @@ class VoiceCaptureManager(private val context: Context) {
 
     fun destroy() {
         mainHandler.removeCallbacks(timeoutRunnable)
+        mainHandler.removeCallbacks(idleCheckRunnable)
         speechRecognizer?.destroy()
         speechRecognizer = null
         errorCallback = null

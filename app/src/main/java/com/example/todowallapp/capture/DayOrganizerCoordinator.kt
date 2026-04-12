@@ -12,7 +12,7 @@ import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.repository.GoogleCalendarRepository
 import com.example.todowallapp.data.repository.GoogleTasksRepository
 import com.example.todowallapp.security.GeminiKeyStore
-import com.example.todowallapp.voice.VoiceCaptureManager
+
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,14 +38,12 @@ private const val TAG = "DayOrganizerCoordinator"
 
 sealed class DayOrganizerState {
     object Idle : DayOrganizerState()
-    data class Listening(val amplitudeLevel: Float = 0f) : DayOrganizerState()
     data class Processing(val isAdjustment: Boolean = false) : DayOrganizerState()
     data class PlanReady(
         val plan: DayPlan,
         val focusedIndex: Int = 0,
         val pendingRemoveIndex: Int? = null
     ) : DayOrganizerState()
-    data class Adjusting(val previousPlan: DayPlan, val amplitudeLevel: Float = 0f) : DayOrganizerState()
     data class Confirming(val current: Int = 0, val total: Int = 0) : DayOrganizerState()
     data class PartialSuccess(val createdCount: Int, val failedBlocks: List<PlanBlock>) : DayOrganizerState()
     data class Error(val message: String, val canRetry: Boolean) : DayOrganizerState()
@@ -56,7 +54,6 @@ sealed class DayOrganizerState {
 // ---------------------------------------------------------------------------
 
 class DayOrganizerCoordinator(
-    private val voiceCaptureManager: VoiceCaptureManager,
     private val geminiCaptureRepository: GeminiCaptureRepository,
     private val geminiKeyStore: GeminiKeyStore,
     private val calendarRepository: GoogleCalendarRepository,
@@ -89,7 +86,7 @@ class DayOrganizerCoordinator(
 
     private var parseJob: Job? = null
 
-    // Stored when startListening is called
+    // Stored when generatePlan is called
     private var scope: CoroutineScope? = null
     private var listProvider: (() -> List<ExistingListRef>)? = null
     private var taskProvider: (() -> List<ExistingTaskRef>)? = null
@@ -111,7 +108,8 @@ class DayOrganizerCoordinator(
     // Public API
     // ---------------------------------------------------------------------------
 
-    fun startListening(
+    fun generatePlan(
+        transcription: String,
         scope: CoroutineScope,
         listProvider: () -> List<ExistingListRef>,
         taskProvider: () -> List<ExistingTaskRef>,
@@ -136,79 +134,13 @@ class DayOrganizerCoordinator(
         this.focusedListTitle = focusedListTitle
         this.energyProfile = energyProfile
 
-        voiceCaptureManager.rawResultCallback = { rawText ->
-            handleTranscription(rawText)
-        }
-        voiceCaptureManager.errorCallback = { message ->
-            _state.value = DayOrganizerState.Error(message, canRetry = true)
-        }
-
-        _state.value = DayOrganizerState.Listening()
-        voiceCaptureManager.startListening(continuous = true)
+        handleTranscription(transcription)
     }
 
-    /**
-     * Start the day planning flow with an already-captured transcription, skipping voice capture.
-     * Used by the unified voice flow when VoiceCaptureManager has already captured speech and
-     * classified it as day planning intent.
-     */
-    fun startWithTranscription(
-        transcription: String,
-        scope: CoroutineScope,
-        listProvider: () -> List<ExistingListRef>,
-        taskProvider: () -> List<ExistingTaskRef>,
-        eventsProvider: suspend () -> List<String>,
-        selectedCalendarId: String = GoogleCalendarRepository.PRIMARY_CALENDAR_ID,
-        weatherProvider: (suspend () -> String?)? = null,
-        wakeHour: Int = 7,
-        sleepHour: Int = 23,
-        focusedListTitle: String? = null
-    ) {
-        this.scope = scope
-        this.listProvider = listProvider
-        this.taskProvider = taskProvider
-        this.eventsProvider = eventsProvider
-        this.selectedCalendarId = selectedCalendarId
-        this.weatherProvider = weatherProvider
-        this.wakeHour = wakeHour
-        this.sleepHour = sleepHour
-        this.focusedListTitle = focusedListTitle
-
-        lastTranscription = transcription
-        _state.value = DayOrganizerState.Processing()
-
-        scope.launch {
-            handleTranscription(transcription)
-        }
-    }
-
-    fun stopListening() {
-        voiceCaptureManager.stopListening()
-    }
-
-    fun startAdjustment() {
+    fun adjustPlan(adjustmentText: String) {
         val currentState = _state.value
         if (currentState !is DayOrganizerState.PlanReady) return
-        val plan = currentState.plan
-
-        voiceCaptureManager.rawResultCallback = { rawText ->
-            handleAdjustmentTranscription(rawText, plan)
-        }
-        voiceCaptureManager.errorCallback = { message ->
-            _state.value = DayOrganizerState.Error(message, canRetry = true)
-        }
-
-        _state.value = DayOrganizerState.Adjusting(previousPlan = plan)
-        // VoiceCaptureManager._state may be stuck at Processing from the previous recognition
-        // (onResults sets it to Processing then fires the callback, but never resets it).
-        // That stuck state causes startListening()'s guard to return early without activating
-        // the mic. Reset to Idle first so the guard passes.
-        voiceCaptureManager.resetToIdle()
-        voiceCaptureManager.startListening(continuous = true)
-    }
-
-    fun stopAdjustmentListening() {
-        voiceCaptureManager.stopListening()
+        handleAdjustmentTranscription(adjustmentText, currentState.plan)
     }
 
     suspend fun acceptPlan(): Result<Int> {
@@ -323,9 +255,6 @@ class DayOrganizerCoordinator(
     fun cancel() {
         parseJob?.cancel()
         parseJob = null
-        voiceCaptureManager.rawResultCallback = null
-        voiceCaptureManager.errorCallback = null
-        voiceCaptureManager.cancel()
         currentPlan = null
         lastTranscription = null
         conversationTurns.clear()
@@ -333,7 +262,6 @@ class DayOrganizerCoordinator(
         planGenerationConfig = null
         adjustmentAttempts = 0
         lastCreatedEventIds.clear()
-        // Reset all provider/config state set by startListening()
         scope = null
         listProvider = null
         taskProvider = null
@@ -345,14 +273,6 @@ class DayOrganizerCoordinator(
         wakeHour = 7
         sleepHour = 23
         _state.value = DayOrganizerState.Idle
-    }
-
-    fun updateAmplitude(level: Float) {
-        when (val s = _state.value) {
-            is DayOrganizerState.Listening -> _state.value = s.copy(amplitudeLevel = level)
-            is DayOrganizerState.Adjusting -> _state.value = s.copy(amplitudeLevel = level)
-            else -> { /* no-op */ }
-        }
     }
 
     fun setFocusedIndex(index: Int) {

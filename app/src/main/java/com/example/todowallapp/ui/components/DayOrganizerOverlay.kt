@@ -28,11 +28,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
 import com.example.todowallapp.capture.DayOrganizerState
 import com.example.todowallapp.data.model.DayPlan
 import com.example.todowallapp.data.model.Flexibility
@@ -47,7 +45,6 @@ private val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
 @Composable
 fun DayOrganizerOverlay(
     state: DayOrganizerState,
-    onStopListening: () -> Unit,
     onAccept: () -> Unit,
     onAdjust: () -> Unit,
     onCancel: () -> Unit,
@@ -68,7 +65,7 @@ fun DayOrganizerOverlay(
     LaunchedEffect(state) {
         val prev = previousState
         when {
-            state is DayOrganizerState.Listening && prev is DayOrganizerState.Idle ->
+            state is DayOrganizerState.Processing && prev is DayOrganizerState.Idle ->
                 performAppHaptic(view, context, AppHapticPattern.NAVIGATE)
             state is DayOrganizerState.PlanReady && prev !is DayOrganizerState.PlanReady ->
                 performAppHaptic(view, context, AppHapticPattern.CONFIRM)
@@ -92,22 +89,6 @@ fun DayOrganizerOverlay(
             contentAlignment = Alignment.Center
         ) {
             when (state) {
-                is DayOrganizerState.Listening -> {
-                    ListeningContent(
-                        label = "PLANNING YOUR DAY",
-                        hint = "tell me your tasks and how long each will take",
-                        hintExample = "e.g.  groceries 30 min \u00B7 dentist 1 hour \u00B7 gym 45 min",
-                        amplitudeLevel = state.amplitudeLevel,
-                        onStop = onStopListening
-                    )
-                }
-                is DayOrganizerState.Adjusting -> {
-                    ListeningContent(
-                        label = "ADJUSTING PLAN",
-                        amplitudeLevel = state.amplitudeLevel,
-                        onStop = onStopListening
-                    )
-                }
                 is DayOrganizerState.Processing -> {
                     ProcessingContent(isAdjustment = state.isAdjustment)
                 }
@@ -151,77 +132,6 @@ fun DayOrganizerOverlay(
                 else -> {}
             }
         }
-    }
-}
-
-@Composable
-private fun ListeningContent(
-    label: String,
-    hint: String? = null,
-    hintExample: String? = null,
-    amplitudeLevel: Float,
-    onStop: () -> Unit
-) {
-    val colors = LocalWallColors.current
-
-    // Hint auto-fades after 5 seconds so experienced users aren't distracted
-    var showHint by remember(label) { mutableStateOf(hint != null) }
-    if (hint != null) {
-        LaunchedEffect(label) {
-            delay(5_000)
-            showHint = false
-        }
-    }
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable(onClick = onStop)
-    ) {
-        Text(
-            text = label,
-            color = colors.textMuted,
-            fontSize = 13.sp,
-            letterSpacing = 1.sp
-        )
-        Spacer(Modifier.height(16.dp))
-        WaveformVisualizer(
-            amplitudeLevel = amplitudeLevel,
-            isActive = true,
-            modifier = Modifier.size(200.dp)
-        )
-        Spacer(Modifier.height(16.dp))
-
-        // Contextual hint -- fades out after 5s
-        AnimatedVisibility(
-            visible = showHint,
-            exit = fadeOut(tween(800))
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = hint ?: "",
-                    color = colors.textMuted.copy(alpha = 0.5f),
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center
-                )
-                hintExample?.let {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = it,
-                        color = colors.textMuted.copy(alpha = 0.3f),
-                        fontSize = 11.sp,
-                        fontStyle = FontStyle.Italic,
-                        textAlign = TextAlign.Center
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-            }
-        }
-
-        Text(
-            text = "Click to finish speaking",
-            color = colors.textMuted.copy(alpha = 0.5f),
-            fontSize = 11.sp
-        )
     }
 }
 
