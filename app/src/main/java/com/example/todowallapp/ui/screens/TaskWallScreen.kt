@@ -1442,23 +1442,12 @@ fun TaskWallScreen(
                                     modifier = Modifier.size(200.dp)
                                 )
                                 Spacer(Modifier.height(16.dp))
-                                // Hint fades after 5s so experienced users aren't bothered
-                                var showHint by remember { mutableStateOf(true) }
-                                LaunchedEffect(Unit) {
-                                    kotlinx.coroutines.delay(5_000)
-                                    showHint = false
-                                }
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = showHint,
-                                    exit = fadeOut(tween(800))
-                                ) {
-                                    Text(
-                                        text = "add a task, or say \u201Cplan my day\u201D to schedule",
-                                        color = colors.textMuted.copy(alpha = 0.45f),
-                                        fontSize = 12.sp,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                    )
-                                }
+                                Text(
+                                    text = "Speak naturally \u2014 click to finish",
+                                    color = colors.textMuted.copy(alpha = 0.45f),
+                                    fontSize = 12.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
                             }
                         }
                     }
@@ -1486,7 +1475,7 @@ fun TaskWallScreen(
                             VoiceIntent.RESCHEDULE -> "Reschedule Task"
                             VoiceIntent.QUERY -> "Tasks Found"
                             VoiceIntent.AMEND -> "Amended Task"
-                            VoiceIntent.DAY_PLAN -> "Plan Day"
+                            VoiceIntent.DAY_PLAN -> "Plan Your Day"
                         }
                         Card(
                             modifier = Modifier
@@ -1590,7 +1579,7 @@ fun TaskWallScreen(
                                         VoiceIntent.RESCHEDULE -> "Reschedule"
                                         VoiceIntent.QUERY -> "Dismiss"
                                         VoiceIntent.AMEND -> "Confirm"
-                                        VoiceIntent.DAY_PLAN -> "Confirm"
+                                        VoiceIntent.DAY_PLAN -> "Start Planning"
                                     }
                                     Box(
                                         modifier = Modifier
