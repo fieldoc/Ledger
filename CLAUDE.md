@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -107,24 +107,9 @@ Marking a task as done should feel like a **mini reward** — a small, satisfyin
 - **What to avoid**: Green checkmark animations, confetti, particle effects, celebratory sounds, or anything that feels like a mobile game reward. The satisfaction comes from the physical click of the encoder + the crisp haptic + the quiet visual acknowledgment. Understated and real.
 - **Timing**: The haptic, visual, and encoder click should all land together — simultaneity is what makes it feel premium. Any delay between the physical click and the response breaks the illusion.
 
-## Voice-First Task Input (Priority Feature)
+## Voice Input (Implemented)
 
-The app should support adding tasks directly from the wall-mounted device, with **voice as the primary input method**. Typing on a wall-mounted kiosk is impractical, so voice-to-text is the natural interaction model.
-
-### Vision
-- Users should be able to walk up to the device, speak a task, and have it appear on the wall and sync to Google Tasks.
-- The interaction should feel effortless — minimal taps to initiate, clear visual feedback during listening, and graceful confirmation of what was captured.
-
-### Implementation Direction
-- **Phase 1**: On-device speech recognition (Android SpeechRecognizer API) for basic voice-to-text transcription.
-- **Phase 2**: AI API integration (e.g., cloud speech-to-text or LLM-backed parsing) for smarter input — natural language understanding of due dates, task list assignment, priority, and multi-task utterances (e.g., "Remind me to buy groceries tomorrow and call the dentist by Friday").
-
-### UX Considerations
-- Voice activation should be discoverable but unobtrusive — consistent with the calm, premium UI. No always-listening mic icons pulsing on screen.
-- Listening state should use subtle, elegant visual feedback (e.g., a gentle waveform or soft glow) — not a loud animation.
-- Confirmation of captured text should be brief and clear, with easy correction or cancel before committing.
-- Error states (couldn't hear, no network for cloud API) should be graceful and non-alarming.
-- Consider a physical trigger (tap anywhere, or a dedicated mic button area) rather than a wake word, to maintain the quiet-by-default nature of the display.
+Voice capture is fully implemented: SpeechRecognizer on-device STT → Gemini AI parses natural language (due dates, target list, parent task) → draft card preview → encoder click to confirm. Trigger: header voice button (encoder: navigate to it, click). Flow: full-screen dim + waveform visualizer → draft card → confirm/cancel. See Voice & AI Capture Pipeline in Architecture for technical details.
 
 ## Design Decisions (Binding Specs)
 
@@ -283,10 +268,11 @@ The app runs in immersive fullscreen mode configured in `MainActivity`:
 - Three view modes: MONTH (default), WEEK (7 days), DAY
 
 ### Voice & AI Capture Pipeline
-- `VoiceCaptureManager` wraps Android `SpeechRecognizer` for on-device speech-to-text
-- `VoiceParsingCoordinator` orchestrates the full voice → Gemini parse → route → commit flow
-- `GeminiCaptureRepository` sends transcriptions to Gemini API for natural language parsing
-- Gemini extracts: task title, due date, target list, parent task, clarification
+- `VoiceCaptureManager` wraps Android `SpeechRecognizer` — always-continuous, no `continuous` parameter on `startListening()`
+- Use `cancel()` for full teardown — `resetToIdle()` only flips state flag, does NOT stop recognizer or remove handler callbacks
+- `VoiceParsingCoordinator` orchestrates voice → Gemini parse → route → commit. Call `configureDayPlanningContext()` after `loadSettings()` (use `refreshDayPlanningContext()` helper to avoid stale sleep hours)
+- `GeminiCaptureRepository` sends transcriptions to Gemini. `VoiceIntent` enum: ADD/COMPLETE/RESCHEDULE/DELETE/QUERY/AMEND/DAY_PLAN
+- `VoiceIntentRouter.kt` deleted (2026-04-12) — Gemini classifies all intents including DAY_PLAN
 - `ListRouting` assigns parsed tasks to the correct Google Tasks list
 - `CaptureCommitOrchestrator` handles the Tasks API write after user confirmation
 - Falls back to raw transcription if Gemini parsing fails
@@ -295,7 +281,9 @@ The app runs in immersive fullscreen mode configured in `MainActivity`:
 - Voice overlay (waveform + dim), draft card preview, and confirm/cancel flow are fully implemented
 
 ### Day Organizer
-- `DayOrganizerCoordinator` manages an 8-state planning state machine (Idle → Collecting → Generating → PlanReady → Accepted → etc.)
+- `DayOrganizerCoordinator` manages a 6-state planning state machine: Idle → Processing → PlanReady → Confirming → PartialSuccess / Error
+- Entry points: `generatePlan(transcription, scope, ...)` and `adjustPlan(adjustmentText)` — coordinator receives text, does NOT own voice capture
+- Constructor: `DayOrganizerCoordinator(geminiCaptureRepository, geminiKeyStore, calendarRepository, tasksRepository)` — no VoiceCaptureManager
 - `DayPlan` model: list of `PlanBlock`s with 12 categories, per-block confidence + flexibility, `EnergyProfile` setting
 - `DayOrganizerOverlay` renders the conversation UI and per-block encoder-navigable plan preview
 - Accepted plans write events to Google Calendar via `GoogleCalendarRepository`
@@ -321,8 +309,6 @@ app/src/main/java/com/example/todowallapp/
 │   │   ├── PendingCaptureStore.kt      # Holds draft captures awaiting confirmation
 │   │   ├── ListRouting.kt              # Assigns captured tasks to correct list
 │   │   └── ScannerRepository.kt        # QR/barcode scanning support
-│   └── router/
-│       └── VoiceIntentRouter.kt        # Routes voice intent to correct handler
 ├── data/
 │   ├── model/
 │   │   ├── Task.kt             # Data models (Task, TaskList, TaskUrgency)
@@ -493,7 +479,7 @@ gemini -m gemini-2.5-flash -p "Your query here"
 
 **Available models:**
 - `gemini-2.5-flash` - **RECOMMENDED** - Best balance of speed and reasoning quality
-- `gemini-3.1-flash-lite` - Faster, higher rate limits (500 RPD vs 20), use for simple lookups
+- `gemini-2.5-flash-lite` - Faster, higher rate limits (500 RPD vs 20), use for simple lookups
 
 ### Syntax
 
@@ -530,7 +516,7 @@ Bundle all related files in a single Gemini call rather than reading iteratively
 gemini -m gemini-2.5-flash -p "@app/.../CalendarScreen.kt @app/.../CalendarDayView.kt @app/.../CalendarEvent.kt @app/.../GoogleCalendarRepository.kt @app/.../TaskWallViewModel.kt Analyze..."
 ```
 
-Loading 5 files in one shot gives a complete cross-layer picture faster than sequential Serena symbol reads.
+Loading 5 files in one shot gives a complete cross-layer picture faster than sequential LSP symbol reads.
 
 ### Important Notes
 
@@ -556,4 +542,15 @@ All timestamp parsing uses system timezone via `ZoneId.systemDefault()`. Due dat
 The warm accent for promoted tasks/urgency is `colors.accentWarm` — there is no `urgencyWarm` property. Full urgency tokens: `urgencyOverdue`, `urgencyDueToday`, `urgencyDueSoon`, `urgencyOverdueSubtle`.
 
 ### CalendarScreen Call Site
-`CalendarScreen(...)` is called from `MainActivity.kt` (~line 463), not from `TaskWallScreen.kt`.
+`CalendarScreen(...)` is called from `MainActivity.kt`, not from `TaskWallScreen.kt`.
+
+### Code Navigation (Kotlin LSP)
+`kotlin-lsp@claude-plugins-official` is active — transparent LSP, no explicit tool calls needed.
+Use `Grep` with `glob: "**/*.kt"` scoped to `app/src` for symbol searches; `Glob` for file discovery.
+See `.claude/rules/kotlin-lsp.md` for the full decision guide.
+
+### Hook Configuration Gotcha
+PreToolUse hooks fire synchronously and spawn a shell process. Use the narrowest matcher
+possible — `"Bash(git commit*)"` not `"Bash"`. A broad matcher on Bash adds overhead to
+every shell call in the session. Hooks belong in `settings.local.json` (gitignored), not
+`settings.json` (tracked).

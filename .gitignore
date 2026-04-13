@@ -63,7 +63,6 @@ nul
 .claude/worktrees/
 .gemini/
 .firecrawl/
-.serena/
 .superpowers/
 
 # Google Services config (contains API keys)
