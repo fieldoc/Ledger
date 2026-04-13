@@ -284,6 +284,7 @@ The app runs in immersive fullscreen mode configured in `MainActivity`:
 - `DayOrganizerCoordinator` manages a 6-state planning state machine: Idle → Processing → PlanReady → Confirming → PartialSuccess / Error
 - Entry points: `generatePlan(transcription, scope, ...)` and `adjustPlan(adjustmentText)` — coordinator receives text, does NOT own voice capture
 - Constructor: `DayOrganizerCoordinator(geminiCaptureRepository, geminiKeyStore, calendarRepository, tasksRepository)` — no VoiceCaptureManager
+- **Known gap**: `DayOrganizerOverlay` call in `TaskWallScreen` omits `onRetryFailed`, `onSetPendingRemove`, `onConfirmRemoveBlock`, `taskNameById` — block removal and "from: task" labels silently no-op in wall mode. CalendarScreen wires them correctly.
 - `DayPlan` model: list of `PlanBlock`s with 12 categories, per-block confidence + flexibility, `EnergyProfile` setting
 - `DayOrganizerOverlay` renders the conversation UI and per-block encoder-navigable plan preview
 - Accepted plans write events to Google Calendar via `GoogleCalendarRepository`
