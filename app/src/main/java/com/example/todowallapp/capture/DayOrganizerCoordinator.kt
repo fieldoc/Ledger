@@ -122,6 +122,7 @@ class DayOrganizerCoordinator(
         groundingContextProvider: (suspend () -> String?)? = null,
         energyProfile: EnergyProfile = EnergyProfile.BALANCED
     ) {
+        if (_state.value !is DayOrganizerState.Idle) return
         this.scope = scope
         this.listProvider = listProvider
         this.taskProvider = taskProvider
