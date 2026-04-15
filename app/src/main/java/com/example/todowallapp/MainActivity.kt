@@ -500,6 +500,7 @@ private fun WallModeContent(
                         onAdjustDayPlan = { viewModel.adjustDayPlan() },
                         onCancelDayOrganizer = { viewModel.cancelDayOrganizer() },
                         onRetryDayOrganizer = { viewModel.retryDayOrganizer() },
+                        onRetryFailedDayPlanBlocks = { blocks -> viewModel.retryFailedDayPlanBlocks(blocks) },
                         error = uiState.error,
                         onDismissError = viewModel::clearError,
                         isSyncing = uiState.isSyncing,
