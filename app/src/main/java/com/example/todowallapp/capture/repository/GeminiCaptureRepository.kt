@@ -278,7 +278,7 @@ class GeminiCaptureRepository(
 
     /**
      * Build a multi-turn request body for conversational Gemini use (e.g., plan adjustments).
-     * Each turn is a pair of (userText, modelText). The final user turn is the latest request.
+     * Each turn is a pair of (role, content). The list alternates user/model entries and must end with a user entry.
      */
     fun buildMultiTurnRequestBody(
         systemInstruction: String,
@@ -293,19 +293,11 @@ class GeminiCaptureRepository(
             })
         })
         add("contents", JsonArray().apply {
-            for ((userText, modelText) in turns) {
-                // user turn
+            for ((role, content) in turns) {
                 add(JsonObject().apply {
-                    addProperty("role", "user")
+                    addProperty("role", role)
                     add("parts", JsonArray().apply {
-                        add(JsonObject().apply { addProperty("text", userText) })
-                    })
-                })
-                // model turn
-                add(JsonObject().apply {
-                    addProperty("role", "model")
-                    add("parts", JsonArray().apply {
-                        add(JsonObject().apply { addProperty("text", modelText) })
+                        add(JsonObject().apply { addProperty("text", content) })
                     })
                 })
             }
