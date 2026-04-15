@@ -891,6 +891,7 @@ class TaskWallViewModel(
         voiceParsingCoordinator.cancelParse()
         voiceParsingCoordinator.clearMetadata()
         voiceCaptureManager.cancel()
+        restoreVoicePipelineCallback()
     }
 
     fun confirmVoiceTasks(overrideListId: String? = null) {
