@@ -282,7 +282,6 @@ class TaskWallViewModel(
             listIdValidator = ::resolveKnownTaskListId
         )
 
-        refreshDayPlanningContext()
         loadSettings()
         checkAuthState()
         observeConnectivity()
@@ -858,16 +857,6 @@ class TaskWallViewModel(
         }
     }
 
-    fun startVoiceInput() {
-        if (!isOnline.value) {
-            setTransientMessage("No internet connection — voice input requires network access.")
-            return
-        }
-        voiceParsingCoordinator.cancelParse()
-        voiceParsingCoordinator.clearMetadata()
-        voiceCaptureManager.startListening()
-    }
-
     /**
      * Unified voice capture: starts listening, then routes the transcription
      * to either task voice (ADD/COMPLETE/etc.) or day planning based on what
@@ -1305,12 +1294,6 @@ class TaskWallViewModel(
         // the user speaks, Gemini classifies the intent as DAY_PLAN, and
         // confirmVoiceTasks() routes to dayOrganizerCoordinator.generatePlan().
         startUnifiedVoiceCapture()
-    }
-
-    fun stopDayOrganizerListening() {
-        // Listening/Adjusting states removed in unified pipeline — voice is managed
-        // by VoiceCaptureManager. Stop voice if active.
-        voiceCaptureManager.stopListening()
     }
 
     fun acceptDayPlan() {
