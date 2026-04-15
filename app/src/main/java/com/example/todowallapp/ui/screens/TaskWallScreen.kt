@@ -156,6 +156,7 @@ import com.example.todowallapp.ui.theme.WallShapes
 import com.example.todowallapp.ui.utils.AppHapticPattern
 import com.example.todowallapp.ui.utils.performAppHaptic
 import com.example.todowallapp.ui.utils.rememberLayoutDimensions
+import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.viewmodel.TaskWallViewModel
 import com.example.todowallapp.viewmodel.ThemeMode
@@ -272,6 +273,7 @@ fun TaskWallScreen(
     onAdjustDayPlan: () -> Unit = {},
     onCancelDayOrganizer: () -> Unit = {},
     onRetryDayOrganizer: () -> Unit = {},
+    onRetryFailedDayPlanBlocks: (List<PlanBlock>) -> Unit = {},
     error: String? = null,
     onDismissError: () -> Unit = {},
     isSyncing: Boolean = false,
@@ -1663,7 +1665,8 @@ fun TaskWallScreen(
             onAccept = onAcceptDayPlan,
             onAdjust = onAdjustDayPlan,
             onCancel = onCancelDayOrganizer,
-            onRetry = onRetryDayOrganizer
+            onRetry = onRetryDayOrganizer,
+            onRetryFailed = onRetryFailedDayPlanBlocks
         )
 
         // Transient message toast — bottom-center

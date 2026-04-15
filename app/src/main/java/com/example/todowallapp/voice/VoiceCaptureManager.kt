@@ -54,6 +54,10 @@ class VoiceCaptureManager(private val context: Context) {
     // Named listener field so restartRecognizer() can re-attach it
     private var activeListener: RecognitionListener? = null
 
+    // Incremented by cancel() to invalidate any pending mainHandler.post from startListening().
+    // The deferred post captures this value at call time and aborts if it has changed.
+    private var sessionId = 0
+
     // Idle timeout: if no speech detected for 60s, auto-stop
     private var lastSpeechTimestamp = 0L
 
@@ -178,7 +182,10 @@ class VoiceCaptureManager(private val context: Context) {
             return
         }
 
+        val capturedSessionId = ++sessionId
         mainHandler.post {
+            // Bail out if cancel() was called between startListening() and this post executing.
+            if (sessionId != capturedSessionId) return@post
             // Initialize state on the main thread so listener callbacks
             // reading these fields are always on the same thread.
             userRequestedStop = false
@@ -346,6 +353,7 @@ class VoiceCaptureManager(private val context: Context) {
     }
 
     fun cancel() {
+        sessionId++  // invalidate any pending mainHandler.post from startListening()
         mainHandler.removeCallbacks(timeoutRunnable)
         mainHandler.removeCallbacks(idleCheckRunnable)
         unmuteBeep()
