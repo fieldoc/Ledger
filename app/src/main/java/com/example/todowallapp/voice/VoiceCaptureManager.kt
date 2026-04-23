@@ -135,41 +135,54 @@ class VoiceCaptureManager(private val context: Context) {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     }
 
-    /** Mute the music stream to suppress Android's recognizer start/stop chimes. */
+    /**
+     * Streams that different OEMs route the recognizer start/stop chime through.
+     * Muting only STREAM_MUSIC is not enough on most devices.
+     */
+    private val beepStreams = intArrayOf(
+        AudioManager.STREAM_MUSIC,
+        AudioManager.STREAM_NOTIFICATION,
+        AudioManager.STREAM_SYSTEM,
+        AudioManager.STREAM_ALARM,
+        AudioManager.STREAM_RING,
+        AudioManager.STREAM_DTMF
+    )
+    private var beepMuted = false
+
+    /** Mute every stream the chime might play on. Idempotent. */
     private fun muteBeep() {
-        try {
-            audioManager.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_MUTE,
-                0
-            )
-        } catch (_: Exception) { /* best-effort */ }
+        if (beepMuted) return
+        beepMuted = true
+        for (stream in beepStreams) {
+            try {
+                audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, 0)
+            } catch (_: Exception) { /* best-effort */ }
+        }
     }
 
     private fun unmuteBeep() {
-        try {
-            audioManager.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_UNMUTE,
-                0
-            )
-        } catch (_: Exception) { /* best-effort */ }
+        if (!beepMuted) return
+        beepMuted = false
+        for (stream in beepStreams) {
+            try {
+                audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, 0)
+            } catch (_: Exception) { /* best-effort */ }
+        }
     }
 
     private fun restartRecognizer() {
         mainHandler.removeCallbacks(timeoutRunnable)
-        // Mute to suppress Android's end/start chime during seamless restart
+        // Keep streams muted across the restart — the session is still active,
+        // so any early unmute lets the next segment-end chime play and the user
+        // perceives it as being cut off. Unmute only when listening truly ends
+        // (stopListening / cancel / deliverAccumulatedText / destroy).
         muteBeep()
-        // Create the new recognizer before destroying the old one to minimize
-        // the audio gap between segments — reduces mid-sentence cutoff risk.
         val newRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
         newRecognizer.setRecognitionListener(activeListener ?: return)
         speechRecognizer?.destroy()
         speechRecognizer = newRecognizer
         newRecognizer.startListening(buildSpeechIntent())
         mainHandler.postDelayed(timeoutRunnable, LISTENING_TIMEOUT_MS)
-        // Unmute after a short delay to let the start chime pass
-        mainHandler.postDelayed({ unmuteBeep() }, 500)
     }
 
     fun startListening() {
@@ -238,6 +251,25 @@ class VoiceCaptureManager(private val context: Context) {
                 }
 
                 override fun onError(error: Int) {
+                    // Recoverable errors should NOT end the session. The user
+                    // hates being cut off mid-thought. Keep the recognizer
+                    // alive by restarting; only the 60s idle check or an
+                    // explicit stop should ever terminate listening.
+                    val recoverable = when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH,
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+                        SpeechRecognizer.ERROR_NETWORK,
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+                        SpeechRecognizer.ERROR_SERVER,
+                        SpeechRecognizer.ERROR_CLIENT,
+                        SpeechRecognizer.ERROR_AUDIO -> true
+                        else -> false
+                    }
+                    if (recoverable && !userRequestedStop) {
+                        restartRecognizer()
+                        return
+                    }
+
                     mainHandler.removeCallbacks(timeoutRunnable)
                     mainHandler.removeCallbacks(idleCheckRunnable)
                     val message = when (error) {
@@ -254,10 +286,6 @@ class VoiceCaptureManager(private val context: Context) {
                     speechRecognizer?.destroy()
                     speechRecognizer = null
 
-                    // If we already have accumulated text from earlier segments, deliver it
-                    // rather than discarding on any recoverable error (silence, network,
-                    // server, client, audio). Losing captured speech on a transient failure
-                    // is the single worst UX outcome in this pipeline.
                     if (accumulatedText.isNotEmpty()) {
                         unmuteBeep()
                         val finalText = accumulatedText.toString().trim()
@@ -397,6 +425,7 @@ class VoiceCaptureManager(private val context: Context) {
     fun destroy() {
         mainHandler.removeCallbacks(timeoutRunnable)
         mainHandler.removeCallbacks(idleCheckRunnable)
+        unmuteBeep()
         speechRecognizer?.destroy()
         speechRecognizer = null
         activeListener = null
