@@ -427,10 +427,11 @@ class PhoneCaptureViewModel(
                 }
 
                 VoiceIntent.DAY_PLAN -> {
-                    // Day planning is not supported in phone mode — dismiss and inform user
-                    voiceParsingCoordinator.clearMetadata()
-                    voiceCaptureManager.cancel()
-                    _uiState.value = _uiState.value.copy(showVoiceSheet = false)
+                    // Day planning is only available in wall mode. Surface a message instead
+                    // of silently dropping the user's utterance.
+                    voiceCaptureManager.setError(
+                        "Day planning is only available in wall mode. Open the wall display to plan your day."
+                    )
                 }
             }
         }

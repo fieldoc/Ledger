@@ -589,6 +589,9 @@ private fun WallModeContent(
                         planUndoState = planUndoState,
                         onUndoPlanAcceptance = { viewModel.undoPlanAcceptance() },
                         onDismissPlanUndo = { viewModel.dismissPlanUndo() },
+                        onSetPendingRemoveBlock = { viewModel.setPendingRemoveBlock(it) },
+                        onConfirmRemoveBlock = { viewModel.confirmRemoveBlock(it) },
+                        taskNameById = viewModel.taskNameById.collectAsState().value,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
