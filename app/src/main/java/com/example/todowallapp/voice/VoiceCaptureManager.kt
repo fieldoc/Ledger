@@ -49,7 +49,6 @@ class VoiceCaptureManager(private val context: Context) {
     // Always-continuous mode state
     private var userRequestedStop = false
     private val accumulatedText = StringBuilder()
-    var errorCallback: ((String) -> Unit)? = null
 
     // Named listener field so restartRecognizer() can re-attach it
     private var activeListener: RecognitionListener? = null
@@ -255,12 +254,11 @@ class VoiceCaptureManager(private val context: Context) {
                     speechRecognizer?.destroy()
                     speechRecognizer = null
 
-                    // A silence/no-match error mid-session means the user paused long
-                    // enough to trigger Android's timeout. If we already have accumulated
-                    // text, deliver it rather than discarding it and showing an error.
-                    val isSilenceError = error == SpeechRecognizer.ERROR_NO_MATCH ||
-                            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
-                    if (isSilenceError && accumulatedText.isNotEmpty()) {
+                    // If we already have accumulated text from earlier segments, deliver it
+                    // rather than discarding on any recoverable error (silence, network,
+                    // server, client, audio). Losing captured speech on a transient failure
+                    // is the single worst UX outcome in this pipeline.
+                    if (accumulatedText.isNotEmpty()) {
                         unmuteBeep()
                         val finalText = accumulatedText.toString().trim()
                         val callback = rawResultCallback
@@ -268,14 +266,12 @@ class VoiceCaptureManager(private val context: Context) {
                             _state.value = VoiceInputState.Processing
                             callback(finalText)
                         } else {
-                            showPreviewFallback(finalText)
+                            showPreviewFallback(finalText, clarification = message)
                         }
                         return
                     }
 
                     unmuteBeep()
-
-                    errorCallback?.invoke(message)
                     _state.value = VoiceInputState.Error(message)
                 }
 
@@ -360,7 +356,6 @@ class VoiceCaptureManager(private val context: Context) {
         speechRecognizer?.cancel()
         speechRecognizer?.destroy()
         speechRecognizer = null
-        errorCallback = null
         activeListener = null
         _state.value = VoiceInputState.Idle
     }
@@ -404,7 +399,6 @@ class VoiceCaptureManager(private val context: Context) {
         mainHandler.removeCallbacks(idleCheckRunnable)
         speechRecognizer?.destroy()
         speechRecognizer = null
-        errorCallback = null
         activeListener = null
     }
 }

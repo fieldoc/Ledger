@@ -1214,14 +1214,17 @@ USER'S CLARIFICATION:
         val root = JsonParser.parseString(rawJson).asJsonObject
 
         val intentStr = root.stringValue("intent") ?: "add"
+        var intentFallbackMessage: String? = null
         val intent = try {
             VoiceIntent.valueOf(intentStr.uppercase())
         } catch (e: IllegalArgumentException) {
             Log.w(TAG, "Unknown voice intent '$intentStr', defaulting to ADD", e)
+            intentFallbackMessage =
+                "I wasn't sure what you meant — treating this as a new task. You can edit or cancel before confirming."
             VoiceIntent.ADD
         }
 
-        val clarification = root.stringValue("clarification")
+        val clarification = root.stringValue("clarification") ?: intentFallbackMessage
 
         val tasksArray = root.getAsJsonArray("tasks")
         val tasks = if (tasksArray != null && tasksArray.size() > 0) {

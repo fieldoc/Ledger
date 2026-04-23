@@ -239,8 +239,7 @@ class TaskWallViewModel(
         DayOrganizerCoordinator(
             geminiCaptureRepository = geminiCaptureRepository,
             geminiKeyStore = geminiKeyStore,
-            calendarRepository = calendarRepository,
-            tasksRepository = tasksRepository
+            calendarRepository = calendarRepository
         )
     }
 
@@ -869,6 +868,7 @@ class TaskWallViewModel(
         }
         voiceParsingCoordinator.cancelParse()
         voiceParsingCoordinator.clearMetadata()
+        restoreVoicePipelineCallback()
         voiceCaptureManager.startListening()
     }
 
@@ -1401,6 +1401,7 @@ class TaskWallViewModel(
                 prefs[energyProfileKey] = profile.name
             }
         }
+        refreshDayPlanningContext()
     }
 
     /** Derived task name lookup from allTaskLists for display in plan preview. */
@@ -1790,6 +1791,7 @@ class TaskWallViewModel(
                 prefs[sleepEndHourKey] = endHour
             }
         }
+        refreshDayPlanningContext()
     }
 
     /**

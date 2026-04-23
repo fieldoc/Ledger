@@ -10,7 +10,6 @@ import com.example.todowallapp.data.model.DayPlan
 import com.example.todowallapp.data.model.EnergyProfile
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.repository.GoogleCalendarRepository
-import com.example.todowallapp.data.repository.GoogleTasksRepository
 import com.example.todowallapp.security.GeminiKeyStore
 
 import kotlinx.coroutines.CancellationException
@@ -56,8 +55,7 @@ sealed class DayOrganizerState {
 class DayOrganizerCoordinator(
     private val geminiCaptureRepository: GeminiCaptureRepository,
     private val geminiKeyStore: GeminiKeyStore,
-    private val calendarRepository: GoogleCalendarRepository,
-    private val tasksRepository: GoogleTasksRepository
+    private val calendarRepository: GoogleCalendarRepository
 ) {
     private val _state = MutableStateFlow<DayOrganizerState>(DayOrganizerState.Idle)
     val state: StateFlow<DayOrganizerState> = _state.asStateFlow()

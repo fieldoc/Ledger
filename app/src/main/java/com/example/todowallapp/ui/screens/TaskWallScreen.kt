@@ -275,6 +275,9 @@ fun TaskWallScreen(
     onCancelDayOrganizer: () -> Unit = {},
     onRetryDayOrganizer: () -> Unit = {},
     onRetryFailedDayPlanBlocks: (List<PlanBlock>) -> Unit = {},
+    onSetPendingRemoveBlock: (Int?) -> Unit = {},
+    onConfirmRemoveBlock: (Int) -> Unit = {},
+    taskNameById: Map<String, String> = emptyMap(),
     error: String? = null,
     onDismissError: () -> Unit = {},
     isSyncing: Boolean = false,
@@ -1686,7 +1689,10 @@ fun TaskWallScreen(
             onAdjust = onAdjustDayPlan,
             onCancel = onCancelDayOrganizer,
             onRetry = onRetryDayOrganizer,
-            onRetryFailed = onRetryFailedDayPlanBlocks
+            onRetryFailed = onRetryFailedDayPlanBlocks,
+            onSetPendingRemove = onSetPendingRemoveBlock,
+            onConfirmRemoveBlock = onConfirmRemoveBlock,
+            taskNameById = taskNameById
         )
 
         // Transient message toast — bottom-center
