@@ -24,6 +24,7 @@ import com.example.todowallapp.data.model.TaskListWithTasks
 import com.example.todowallapp.data.model.sortTasksForDisplay
 import com.example.todowallapp.data.repository.GoogleTasksRepository
 import com.example.todowallapp.security.GeminiKeyStore
+import com.example.todowallapp.util.ConnectivityMonitor
 import com.example.todowallapp.voice.VoiceCaptureManager
 import com.example.todowallapp.voice.VoiceInputState
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +75,9 @@ class PhoneCaptureViewModel(
 
     private val voiceCaptureManager = VoiceCaptureManager(context.applicationContext)
     val voiceState: StateFlow<VoiceInputState> = voiceCaptureManager.state
+
+    private val connectivityMonitor = ConnectivityMonitor(context.applicationContext)
+    val isOnline: StateFlow<Boolean> = connectivityMonitor.isOnline
 
     private var lastCapturedImageBytes: ByteArray? = null
     private var activePendingCaptureId: String? = null
@@ -267,6 +271,12 @@ class PhoneCaptureViewModel(
     }
 
     fun showVoiceSheet() {
+        if (!isOnline.value) {
+            _uiState.value = _uiState.value.copy(
+                error = "No internet connection — voice input requires network access."
+            )
+            return
+        }
         _uiState.value = _uiState.value.copy(showVoiceSheet = true)
         // Immediately start listening — no redundant "Start Listening" tap
         voiceParsingCoordinator.cancelParse()
@@ -282,6 +292,12 @@ class PhoneCaptureViewModel(
     }
 
     fun startVoiceInput() {
+        if (!isOnline.value) {
+            _uiState.value = _uiState.value.copy(
+                error = "No internet connection — voice input requires network access."
+            )
+            return
+        }
         voiceCaptureManager.startListening()
     }
 
@@ -715,6 +731,7 @@ class PhoneCaptureViewModel(
         super.onCleared()
         voiceParsingCoordinator.destroy()
         voiceCaptureManager.destroy()
+        connectivityMonitor.destroy()
     }
 
     class Factory(

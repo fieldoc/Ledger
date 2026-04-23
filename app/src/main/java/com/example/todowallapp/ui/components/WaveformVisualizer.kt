@@ -91,6 +91,13 @@ fun WaveformVisualizer(
         label = "active"
     )
 
+    // Smooth the raw amplitude so the visual feels organic rather than jumpy.
+    val smoothedAmplitude by animateFloatAsState(
+        targetValue = amplitudeLevel.coerceIn(0f, 1f),
+        animationSpec = tween(120, easing = EaseOut),
+        label = "amplitude"
+    )
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
@@ -101,14 +108,16 @@ fun WaveformVisualizer(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val center = Offset(size.width / 2, size.height / 2)
             val baseRadius = 24.dp.toPx()
+            val amp = smoothedAmplitude
 
-            // Draw 3 expanding pulse rings
+            // Draw 3 expanding pulse rings — voice amplitude boosts ring opacity.
+            val ringAmpBoost = 1f + amp * 2f
             for (scale in floatArrayOf(ring1, ring2, ring3)) {
                 val normalizedProgress = ((scale - 0.8f) / 1.7f).coerceIn(0f, 1f)
-                val ringAlpha = (1f - normalizedProgress) * 0.06f
+                val ringAlpha = (1f - normalizedProgress) * 0.06f * ringAmpBoost
 
                 drawCircle(
-                    color = colors.accentPrimary.copy(alpha = ringAlpha),
+                    color = colors.accentPrimary.copy(alpha = ringAlpha.coerceAtMost(0.35f)),
                     radius = baseRadius * scale,
                     center = center,
                     style = Stroke(width = 1.dp.toPx())
@@ -119,8 +128,8 @@ fun WaveformVisualizer(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        colors.accentPrimary.copy(alpha = 0.25f),
-                        colors.accentPrimary.copy(alpha = 0.08f)
+                        colors.accentPrimary.copy(alpha = 0.25f + amp * 0.35f),
+                        colors.accentPrimary.copy(alpha = 0.08f + amp * 0.15f)
                     ),
                     center = center,
                     radius = 24.dp.toPx()
@@ -129,18 +138,21 @@ fun WaveformVisualizer(
                 center = center
             )
 
-            // Center dot border
+            // Center dot border — brightens with voice.
             drawCircle(
-                color = colors.accentPrimary.copy(alpha = 0.2f),
+                color = colors.accentPrimary.copy(alpha = 0.2f + amp * 0.4f),
                 radius = 24.dp.toPx(),
                 center = center,
                 style = Stroke(width = 1.dp.toPx())
             )
 
-            // Inner breathing dot (16dp diameter = 8dp radius)
+            // Inner breathing dot (16dp baseline) — amplitude expands radius and alpha.
+            val ampScale = 1f + amp * 1.4f
             drawCircle(
-                color = colors.accentPrimary.copy(alpha = 0.4f * breathe / 1.2f),
-                radius = 8.dp.toPx() * breathe,
+                color = colors.accentPrimary.copy(
+                    alpha = (0.4f * breathe / 1.2f + amp * 0.5f).coerceAtMost(0.95f)
+                ),
+                radius = 8.dp.toPx() * breathe * ampScale,
                 center = center
             )
         }
