@@ -2,6 +2,7 @@ package com.example.todowallapp.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.outlined.Mic
@@ -205,10 +206,32 @@ fun CalendarScreen(
 ) {
     val context = LocalContext.current
 
-    val audioPermissionLauncher = rememberLauncherForActivityResult(
+    val dayOrganizerPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) onStartUnifiedVoice()
+        if (granted) {
+            onStartDayOrganizer()
+        } else {
+            Toast.makeText(
+                context,
+                "Microphone permission required for voice input",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    val unifiedVoicePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            onStartUnifiedVoice()
+        } else {
+            Toast.makeText(
+                context,
+                "Microphone permission required for voice input",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     val startDayOrganizerWithPermission = remember(onStartDayOrganizer, onDismissPlanDayHint) {
@@ -219,7 +242,7 @@ fun CalendarScreen(
                     onStartDayOrganizer()
                 }
                 else -> {
-                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    dayOrganizerPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             }
         }
@@ -232,7 +255,7 @@ fun CalendarScreen(
                     onStartUnifiedVoice()
                 }
                 else -> {
-                    audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    unifiedVoicePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 }
             }
         }
