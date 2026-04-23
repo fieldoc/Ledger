@@ -67,6 +67,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Repeat
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -342,7 +343,17 @@ fun TaskWallScreen(
     val view = LocalView.current
     val colors = LocalWallColors.current
     val dims = rememberLayoutDimensions()
-    val today = remember { LocalDate.now() }
+    var today by remember { mutableStateOf(LocalDate.now()) }
+    // Refresh `today` at midnight so urgency badges stay correct on always-on kiosk
+    LaunchedEffect(Unit) {
+        while (true) {
+            val now = LocalDateTime.now()
+            val nextMidnight = now.toLocalDate().plusDays(1).atStartOfDay()
+            val msUntilMidnight = java.time.Duration.between(now, nextMidnight).toMillis()
+            delay(msUntilMidnight + 500) // small buffer past midnight
+            today = LocalDate.now()
+        }
+    }
     var selectedFocusKey by remember { mutableStateOf<String?>(null) }
     var ambientTier by remember { mutableStateOf(AmbientTier.ACTIVE) }
     val isAmbientMode = ambientTier != AmbientTier.ACTIVE
@@ -1553,11 +1564,20 @@ fun TaskWallScreen(
                                     if (response.intent == VoiceIntent.ADD &&
                                         task.recurrenceRule != null) {
                                         Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            "\u21BB ${task.recurrenceRule.toHumanReadable()}",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = colors.textSecondary.copy(alpha = 0.6f)
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Repeat,
+                                                contentDescription = null,
+                                                tint = colors.textSecondary.copy(alpha = 0.6f),
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                task.recurrenceRule.toHumanReadable(),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = colors.textSecondary.copy(alpha = 0.6f)
+                                            )
+                                        }
                                     }
                                 }
                                 val clarificationText = state.clarification

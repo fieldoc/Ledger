@@ -5,16 +5,27 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +36,7 @@ import androidx.compose.ui.semantics.dialog
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.todowallapp.data.model.Task
 import com.example.todowallapp.data.model.TaskPriority
 import com.example.todowallapp.ui.screens.SubtaskProgress
@@ -118,7 +130,7 @@ fun TaskDetailOverlay(
                 if (task.dueDate != null) {
                     val dueLabel = formatDueLabel(task.dueDate)
                     DetailMetadataRow(
-                        icon = "\uD83D\uDCC5",
+                        icon = Icons.Outlined.CalendarToday,
                         label = "Due: $dueLabel"
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -132,7 +144,7 @@ fun TaskDetailOverlay(
                         TaskPriority.NORMAL -> "Normal"
                     }
                     DetailMetadataRow(
-                        icon = "\u25CF",
+                        icon = Icons.Outlined.Circle,
                         label = "Priority: $priorityLabel"
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -141,7 +153,7 @@ fun TaskDetailOverlay(
                 // Recurrence
                 if (task.recurrenceRule != null) {
                     DetailMetadataRow(
-                        icon = "\u21BB",
+                        icon = Icons.Outlined.Repeat,
                         label = task.recurrenceRule.toHumanReadable()
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -149,7 +161,7 @@ fun TaskDetailOverlay(
 
                 // List name
                 DetailMetadataRow(
-                    icon = "\uD83D\uDCC1",
+                    icon = Icons.Outlined.Folder,
                     label = "List: $listName"
                 )
 
@@ -157,7 +169,7 @@ fun TaskDetailOverlay(
                 if (subtaskProgress?.hasSubtasks == true) {
                     Spacer(modifier = Modifier.height(6.dp))
                     DetailMetadataRow(
-                        icon = "\uD83D\uDD22",
+                        icon = Icons.Outlined.Checklist,
                         label = "Subtasks: ${subtaskProgress.completed}/${subtaskProgress.total} done"
                     )
                 }
@@ -167,7 +179,7 @@ fun TaskDetailOverlay(
                     Spacer(modifier = Modifier.height(6.dp))
                     val timeLabel = "${scheduledTime.toLocalDate().format(DetailDateFormatter)} at ${scheduledTime.format(DetailTimeFormatter)}"
                     DetailMetadataRow(
-                        icon = "\u23F0",
+                        icon = Icons.Outlined.Schedule,
                         label = "Scheduled: $timeLabel"
                     )
                 }
@@ -194,13 +206,22 @@ fun TaskDetailOverlay(
 }
 
 @Composable
-private fun DetailMetadataRow(icon: String, label: String) {
+private fun DetailMetadataRow(icon: ImageVector, label: String) {
     val colors = LocalWallColors.current
-    Text(
-        text = "$icon  $label",
-        style = MaterialTheme.typography.bodyMedium,
-        color = colors.textSecondary
-    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = colors.textSecondary,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.textSecondary
+        )
+    }
 }
 
 private fun formatDueLabel(dueDate: LocalDate): String {

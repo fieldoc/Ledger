@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -34,6 +36,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.todowallapp.data.model.Task
@@ -143,14 +146,30 @@ fun PhoneHomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Bold Header with Glass-style background
-            Surface(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 24.dp),
-                color = colors.surfaceCard.copy(alpha = 0.3f),
-                shape = RoundedCornerShape(24.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x0FFFFFFF))
+                    .padding(bottom = 24.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(colors.surfaceCard.copy(alpha = 0.4f))
+                    .border(
+                        width = 1.dp,
+                        color = colors.rimGloss,
+                        shape = RoundedCornerShape(24.dp)
+                    )
             ) {
+                // Rim gloss highlight
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(
+                            androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                listOf(Color.Transparent, Color.White.copy(alpha = 0.08f), Color.Transparent)
+                            )
+                        )
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -172,7 +191,7 @@ fun PhoneHomeScreen(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    
+
                     Text(
                         text = currentTime.format(DateTimeFormatter.ofPattern("HH:mm")),
                         style = MaterialTheme.typography.headlineSmall,
@@ -363,12 +382,29 @@ fun PhoneHomeScreen(
                                 }
 
                                 if (completedGroups.isNotEmpty()) {
-                                    Text(
-                                        text = "${completedGroups.size} completed",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = LocalWallColors.current.textMuted,
-                                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp, bottom = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        HorizontalDivider(
+                                            modifier = Modifier.weight(1f),
+                                            thickness = 0.5.dp,
+                                            color = LocalWallColors.current.borderColor.copy(alpha = 0.4f)
+                                        )
+                                        Text(
+                                            text = "${completedGroups.size} completed",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = LocalWallColors.current.textMuted,
+                                            modifier = Modifier.padding(horizontal = 12.dp)
+                                        )
+                                        HorizontalDivider(
+                                            modifier = Modifier.weight(1f),
+                                            thickness = 0.5.dp,
+                                            color = LocalWallColors.current.borderColor.copy(alpha = 0.4f)
+                                        )
+                                    }
                                     completedGroups.forEach { group ->
                                         PhoneTaskItem(
                                             task = group.parent,

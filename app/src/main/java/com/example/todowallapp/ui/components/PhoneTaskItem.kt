@@ -119,7 +119,7 @@ fun PhoneTaskItem(
                         onClick = { onTaskToggle(task) },
                         onLongClick = onLongClick
                     )
-                    .background(Color.Transparent)
+                    .background(if (task.isCompleted) Color.Transparent else colors.surfaceCard.copy(alpha = 0.15f))
                     .alpha(contentAlpha)
             ) {
                 // Rim highlight (Gloss)
@@ -166,16 +166,26 @@ fun PhoneTaskItem(
                         checkmarkSize = 13.dp
                     )
                     Spacer(modifier = Modifier.width(14.dp))
-                    Text(
-                        text = task.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = colors.textPrimary,
-                        fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.SemiBold,
-                        textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = task.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = colors.textPrimary,
+                            fontWeight = if (task.isCompleted) FontWeight.Normal else FontWeight.SemiBold,
+                            textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (!task.cleanNotes.isNullOrBlank() && !task.isCompleted) {
+                            Text(
+                                text = task.cleanNotes,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colors.textSecondary.copy(alpha = 0.7f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
 
                     if (task.dueDate != null && !task.isCompleted) {
                         Spacer(modifier = Modifier.width(10.dp))

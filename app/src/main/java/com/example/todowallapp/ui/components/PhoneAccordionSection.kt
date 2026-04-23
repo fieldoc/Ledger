@@ -12,15 +12,21 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.HorizontalDivider
@@ -75,7 +81,17 @@ fun PhoneAccordionSection(
             modifier = modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(24.dp))
-                .background(if (isExpanded) colors.surfaceCard.copy(alpha = 0.3f) else colors.surfaceCard.copy(alpha = 0.15f))
+                .background(if (isExpanded) colors.surfaceCard.copy(alpha = 0.4f) else colors.surfaceCard.copy(alpha = 0.15f))
+                .then(
+                    if (isExpanded) Modifier.drawBehind {
+                        drawRoundRect(
+                            color = colors.accentPrimary.copy(alpha = 0.3f),
+                            topLeft = Offset.Zero,
+                            size = Size(3.dp.toPx(), size.height),
+                            cornerRadius = CornerRadius(3.dp.toPx())
+                        )
+                    } else Modifier
+                )
         ) {
             PhoneAccordionHeader(
                 title = title,

@@ -30,6 +30,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Repeat
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -376,13 +381,14 @@ private fun TaskItemContent(
                             modifier = Modifier.weight(1f)
                         )
 
-                        // Recurrence glyph — shown when task has a recurrence rule
+                        // Recurrence icon — shown when task has a recurrence rule
                         if (task.recurrenceRule != null && !task.isCompleted && !isAmbientMode) {
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "\u21BB",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = LocalWallColors.current.textSecondary.copy(alpha = 0.4f)
+                            Icon(
+                                imageVector = Icons.Outlined.Repeat,
+                                contentDescription = "Recurring task",
+                                tint = LocalWallColors.current.textSecondary.copy(alpha = 0.4f),
+                                modifier = Modifier.size(14.dp)
                             )
                         }
 
@@ -397,18 +403,19 @@ private fun TaskItemContent(
                                 onClick = if (!isAmbientMode) onOpenScheduledSlot else null
                             )
                             if (!task.isCompleted && !isScheduled && !isAmbientMode && onScheduleTask != null) {
-                                Text(
-                                    text = "\u23F1",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = LocalWallColors.current.textMuted,
+                                Icon(
+                                    imageVector = Icons.Outlined.Schedule,
+                                    contentDescription = "Schedule task",
+                                    tint = LocalWallColors.current.textMuted,
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
+                                        .size(32.dp)
+                                        .clip(RoundedCornerShape(6.dp))
                                         .clickable(
                                             role = Role.Button,
                                             onClickLabel = "Schedule task",
                                             onClick = onScheduleTask
                                         )
-                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                        .padding(6.dp)
                                 )
                             }
                             SubtaskCountBadge(
@@ -442,11 +449,20 @@ private fun TaskItemContent(
                     // List name badge (shown in search/filter results)
                     if (!listNameBadge.isNullOrBlank() && !isAmbientMode) {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "\uD83D\uDCC1 $listNameBadge",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = LocalWallColors.current.textMuted
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Outlined.Folder,
+                                contentDescription = null,
+                                tint = LocalWallColors.current.textMuted,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = listNameBadge,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = LocalWallColors.current.textMuted
+                            )
+                        }
                     }
                 }
             }

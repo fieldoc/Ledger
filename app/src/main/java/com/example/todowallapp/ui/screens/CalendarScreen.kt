@@ -35,6 +35,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -64,6 +66,8 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.todowallapp.data.model.CalendarEvent
@@ -1439,17 +1443,33 @@ private fun DateAndCalendarBar(
         else -> selectedDate.format(CalendarDateFormatter)
     }
 
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(LocalWallColors.current.surfaceCard, shape)
             .border(borderWidth, borderColor, shape)
+    ) {
+        // Rim gloss highlight
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(Color.Transparent, LocalWallColors.current.rimGloss, Color.Transparent)
+                    )
+                )
+        )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            HeaderButton(text = "<", onClick = {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            HeaderIconButton(icon = Icons.Outlined.ChevronLeft, contentDescription = "Previous", onClick = {
                 if (calendarViewMode == CalendarViewMode.MONTH) {
                     onSelectDate(selectedDate.minusMonths(1))
                 } else {
@@ -1461,7 +1481,7 @@ private fun DateAndCalendarBar(
                 style = MaterialTheme.typography.titleMedium,
                 color = dateTextColor
             )
-            HeaderButton(text = ">", onClick = {
+            HeaderIconButton(icon = Icons.Outlined.ChevronRight, contentDescription = "Next", onClick = {
                 if (calendarViewMode == CalendarViewMode.MONTH) {
                     onSelectDate(selectedDate.plusMonths(1))
                 } else {
@@ -1479,6 +1499,7 @@ private fun DateAndCalendarBar(
             )
         }
     }
+    }
 }
 
 @Composable
@@ -1486,18 +1507,45 @@ private fun HeaderButton(
     text: String,
     onClick: () -> Unit
 ) {
+    val colors = LocalWallColors.current
     val shape = RoundedCornerShape(999.dp)
     Box(
         modifier = Modifier
-            .background(LocalWallColors.current.surfaceBlack.copy(alpha = 0.35f), shape)
-            .border(1.dp, LocalWallColors.current.borderColor, shape)
+            .background(colors.surfaceCard.copy(alpha = 0.5f), shape)
+            .border(1.dp, colors.rimGloss, shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge,
-            color = LocalWallColors.current.textPrimary
+            color = colors.textPrimary
+        )
+    }
+}
+
+@Composable
+private fun HeaderIconButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit
+) {
+    val colors = LocalWallColors.current
+    val shape = RoundedCornerShape(999.dp)
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .background(colors.surfaceCard.copy(alpha = 0.5f), shape)
+            .border(1.dp, colors.rimGloss, shape)
+            .clip(shape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = colors.textPrimary,
+            modifier = Modifier.size(20.dp)
         )
     }
 }
