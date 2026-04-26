@@ -1095,7 +1095,15 @@ fun CalendarScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.75f)),
+                    .background(Color.Black.copy(alpha = 0.75f))
+                    .then(
+                        if (voiceState is VoiceInputState.Listening) {
+                            Modifier.clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { onStopVoice() }
+                        } else Modifier
+                    ),
                 contentAlignment = Alignment.Center
             ) {
                 when (val state = voiceState) {
