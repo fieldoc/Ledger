@@ -1,0 +1,39 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp"
+    android:height="28dp"
+    android:viewportWidth="28"
+    android:viewportHeight="28">
+    <!-- Phone body (rounded rect, rx=2) -->
+    <path
+        android:pathData="M11,3.5 L17,3.5 A2,2 0 0 1 19,5.5 L19,22.5 A2,2 0 0 1 17,24.5 L11,24.5 A2,2 0 0 1 9,22.5 L9,5.5 A2,2 0 0 1 11,3.5 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <!-- Speaker line -->
+    <path
+        android:pathData="M12.5,22 L15.5,22"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"/>
+    <!-- Mic head circle (r=1.6) -->
+    <path
+        android:pathData="M14,14.5 m-1.6,0 a1.6,1.6 0 1,0 3.2,0 a1.6,1.6 0 1,0 -3.2,0"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <!-- Mic stand arc -->
+    <path
+        android:pathData="M11.5,14.5 a2.5,2.5 0 0 0 5,0"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <!-- Mic stem -->
+    <path
+        android:pathData="M14,17 L14,18.5"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"/>
+</vector>

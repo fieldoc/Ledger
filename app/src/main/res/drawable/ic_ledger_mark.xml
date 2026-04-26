@@ -1,0 +1,25 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="22"
+    android:viewportHeight="22">
+    <!-- Rounded square outline (rx=4) -->
+    <path
+        android:pathData="M6.5,2.5 L15.5,2.5 A4,4 0 0 1 19.5,6.5 L19.5,15.5 A4,4 0 0 1 15.5,19.5 L6.5,19.5 A4,4 0 0 1 2.5,15.5 L2.5,6.5 A4,4 0 0 1 6.5,2.5 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"/>
+    <!-- Top ledger line -->
+    <path
+        android:pathData="M6,9 L16,9"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"/>
+    <!-- Bottom ledger line (shorter) -->
+    <path
+        android:pathData="M6,13 L13,13"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"/>
+</vector>
