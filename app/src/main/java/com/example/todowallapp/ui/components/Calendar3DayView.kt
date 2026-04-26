@@ -1,6 +1,7 @@
 package com.example.todowallapp.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -47,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.todowallapp.data.model.CalendarEvent
+import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.data.model.TaskUrgency
 import com.example.todowallapp.data.model.WeatherCondition
 import com.example.todowallapp.data.model.occursOn
@@ -64,12 +66,13 @@ private val ThreeDayTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPatte
 
 /**
  * 3-day landscape calendar view.
- * Shows a shared time column on the left with 3 side-by-side day columns.
+ * Renders [startDate, startDate+1, startDate+2] — typically today + next two days.
+ * Shared time column on the left with 3 side-by-side day columns.
  * Each day column shows half-hour slots with events.
  */
 @Composable
 fun Calendar3DayView(
-    centerDate: LocalDate,
+    startDate: LocalDate,
     allEvents: List<CalendarEvent>,
     selectedDayOffset: Int,
     selectedSlotIndex: Int,
@@ -80,6 +83,8 @@ fun Calendar3DayView(
     onEventActivated: (CalendarEvent) -> Unit,
     onSlotRangeSelected: (SlotDragRange) -> Unit = {},
     weatherForecast: Map<LocalDate, WeatherCondition> = emptyMap(),
+    planBlocks: List<PlanBlock> = emptyList(),
+    recentlyCreatedEventIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     val colors = LocalWallColors.current
@@ -93,11 +98,11 @@ fun Calendar3DayView(
         }
     }
 
-    val days = remember(centerDate) {
+    val days = remember(startDate) {
         listOf(
-            centerDate.minusDays(1),
-            centerDate,
-            centerDate.plusDays(1)
+            startDate,
+            startDate.plusDays(1),
+            startDate.plusDays(2)
         )
     }
 
@@ -111,6 +116,33 @@ fun Calendar3DayView(
 
     val slotCount = daySlots.firstOrNull()?.size ?: 0
 
+    // Ghost block lookup: maps the slot index where a ghost block STARTS to the block,
+    // per day column. Only ghost (non-existing-event) blocks are surfaced as previews.
+    val ghostBlocksByDayAndSlot: Map<Pair<Int, Int>, PlanBlock> = remember(days, planBlocks, slotCount) {
+        if (planBlocks.isEmpty() || slotCount == 0) {
+            emptyMap()
+        } else {
+            buildMap {
+                planBlocks.asSequence()
+                    .filter { !it.isExistingEvent }
+                    .forEach { block ->
+                        val blockDate = block.startTime.toLocalDate()
+                        val dayIdx = days.indexOf(blockDate)
+                        if (dayIdx < 0) return@forEach
+                        val slotsForDay = daySlots.getOrNull(dayIdx) ?: return@forEach
+                        val idx = slotsForDay.indexOfFirst { slot ->
+                            val end = slot.start.plusMinutes(30)
+                            block.startTime >= slot.start && block.startTime < end
+                        }
+                        if (idx >= 0) {
+                            // Only one chip per slot — first writer wins
+                            putIfAbsent(dayIdx to idx, block)
+                        }
+                    }
+            }
+        }
+    }
+
     // Drag selection state
     var dragStartSlotIdx by remember { mutableIntStateOf(-1) }
     var dragCurrentSlotIdx by remember { mutableIntStateOf(-1) }
@@ -119,7 +151,7 @@ fun Calendar3DayView(
 
     // Auto-scroll to current time, positioned ~1/4 from the top
     val listState = rememberLazyListState()
-    LaunchedEffect(centerDate) {
+    LaunchedEffect(startDate) {
         if (!days.any { it == LocalDate.now() }) return@LaunchedEffect
         val currentTime = LocalDateTime.now()
         if (currentTime.hour < 7) return@LaunchedEffect
@@ -306,7 +338,8 @@ fun Calendar3DayView(
                 val timeSlot = daySlots[0][slotIdx]
                 val slotTime = timeSlot.start
                 val isOnTheHour = slotTime.minute == 0
-                val anyHasEvents = daySlots.any { it[slotIdx].events.isNotEmpty() }
+                val anyHasEvents = daySlots.any { it[slotIdx].events.isNotEmpty() } ||
+                    daySlots.indices.any { ghostBlocksByDayAndSlot.containsKey(it to slotIdx) }
                 val isNowRow = days.any { date ->
                     val slot = daySlots[days.indexOf(date)][slotIdx]
                     date == now.toLocalDate() && now >= slot.start && now < slot.start.plusMinutes(30)
@@ -372,6 +405,8 @@ fun Calendar3DayView(
                                 hasNow = hasNow,
                                 selectedEventId = if (dayIdx == selectedDayOffset) selectedEventId else null,
                                 taskUrgencyByTaskId = taskUrgencyByTaskId,
+                                ghostBlock = ghostBlocksByDayAndSlot[dayIdx to slotIdx],
+                                recentlyCreatedEventIds = recentlyCreatedEventIds,
                                 onSlotActivated = { onSlotActivated(date, slot.start) },
                                 onEventActivated = onEventActivated,
                                 modifier = Modifier
@@ -396,6 +431,8 @@ private fun ThreeDaySlotCell(
     hasNow: Boolean,
     selectedEventId: String?,
     taskUrgencyByTaskId: Map<String, TaskUrgency>,
+    ghostBlock: PlanBlock? = null,
+    recentlyCreatedEventIds: Set<String> = emptySet(),
     onSlotActivated: () -> Unit,
     onEventActivated: (CalendarEvent) -> Unit,
     modifier: Modifier = Modifier
@@ -456,6 +493,35 @@ private fun ThreeDaySlotCell(
                     )
                     .border(1.dp, colors.accentPrimary.copy(alpha = 0.5f), cellShape)
             )
+        }
+
+        // Ghost plan block — translucent preview of a Day Organizer block on an empty slot
+        if (ghostBlock != null && !hasEvents) {
+            val ghostColor = colors.planAccent
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 1.dp, vertical = 2.dp)
+                    .clip(cellShape)
+                    .background(ghostColor.copy(alpha = 0.10f))
+                    .border(1.dp, ghostColor.copy(alpha = 0.30f), cellShape),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(2.dp)
+                        .background(ghostColor.copy(alpha = 0.55f))
+                )
+                Text(
+                    text = ghostBlock.title,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ghostColor.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
         }
 
         // Event chip — left accent bar + title (compact for 3-column layout)
@@ -530,6 +596,21 @@ private fun ThreeDaySlotCell(
                         )
                     }
                 }
+            }
+
+            // Pulse highlight for recently created events — fades over 2 seconds
+            if (event.id in recentlyCreatedEventIds) {
+                val highlightAlpha = remember(event.id) { Animatable(0.35f) }
+                LaunchedEffect(event.id) {
+                    highlightAlpha.animateTo(0f, animationSpec = tween(durationMillis = 2000))
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 1.dp, vertical = 2.dp)
+                        .clip(cellShape)
+                        .background(colors.accentWarm.copy(alpha = highlightAlpha.value))
+                )
             }
         }
     }

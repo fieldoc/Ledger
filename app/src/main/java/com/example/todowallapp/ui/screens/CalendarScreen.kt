@@ -86,7 +86,6 @@ import androidx.compose.animation.togetherWith
 import com.example.todowallapp.data.model.CalendarViewMode
 import com.example.todowallapp.data.model.PlanBlock
 import com.example.todowallapp.ui.components.Calendar3DayView
-import com.example.todowallapp.ui.components.CalendarDayView
 import com.example.todowallapp.ui.components.SlotDragRange
 import com.example.todowallapp.ui.components.CalendarMonthView
 import com.example.todowallapp.ui.components.CalendarWeekView
@@ -98,7 +97,6 @@ import com.example.todowallapp.ui.components.SettingsPanel
 import com.example.todowallapp.ui.components.ViewSwitcherOption
 import com.example.todowallapp.ui.components.ViewSwitcherPill
 import com.example.todowallapp.ui.components.WaveformVisualizer
-import com.example.todowallapp.ui.components.WeekStrip
 import com.example.todowallapp.viewmodel.ThemeMode
 import com.example.todowallapp.ui.components.buildHalfHourSlots
 import com.example.todowallapp.ui.components.taskPickerFocusableCount
@@ -262,16 +260,7 @@ fun CalendarScreen(
     }
 
     val focusRequester = remember { FocusRequester() }
-    val slots = remember(selectedDate, events) { buildHalfHourSlots(selectedDate, events) }
-    val weekStart = remember(selectedDate) { selectedDate.with(DayOfWeek.MONDAY) }
-    val eventsByDate = remember(weekStart, events) {
-        (0..6).associate { offset ->
-            val date = weekStart.plusDays(offset.toLong())
-            date to events.filter { event -> event.occursOn(date) }
-        }
-    }
     val displayMonth = remember(selectedDate) { selectedDate.withDayOfMonth(1) }
-    var selectedSlotIndex by remember(selectedDate) { mutableIntStateOf(0) }
     val dims = rememberLayoutDimensions()
     var selectedEventId by remember { mutableStateOf<String?>(null) }
     var showSettings by remember { mutableStateOf(false) }
@@ -280,8 +269,6 @@ fun CalendarScreen(
     var isViewSwitcherFocused by remember { mutableStateOf(false) }
     var isDateBarFocused by remember { mutableStateOf(false) }
     var isEditingDate by remember { mutableStateOf(false) }
-    var isWeatherExpanded by remember { mutableStateOf(false) }
-    var isWeatherFocused by remember { mutableStateOf(false) }
     var showTaskPicker by remember { mutableStateOf(false) }
     var taskPickerSlotTime by remember { mutableStateOf<LocalDateTime?>(null) }
     var taskPickerFocusIndex by remember { mutableIntStateOf(0) }
@@ -292,12 +279,12 @@ fun CalendarScreen(
     var eventActionFocus by remember { mutableIntStateOf(0) }
     var voicePreviewFocus by remember { mutableIntStateOf(0) }
 
-    // 3-day view state
-    var threeDaySelectedColumn by remember { mutableIntStateOf(1) } // 0=yesterday, 1=today, 2=tomorrow
+    // 3-day view state — columns are [selectedDate, +1, +2]
+    var threeDaySelectedColumn by remember(selectedDate) { mutableIntStateOf(0) } // 0=today, 1=+1, 2=+2
     var threeDaySlotIndex by remember(selectedDate) { mutableIntStateOf(0) }
     val threeDayAllEvents = remember(eventsForRange) { eventsForRange.values.flatten() }
     val threeDaySlots = remember(selectedDate, threeDayAllEvents) {
-        val days = listOf(selectedDate.minusDays(1), selectedDate, selectedDate.plusDays(1))
+        val days = listOf(selectedDate, selectedDate.plusDays(1), selectedDate.plusDays(2))
         days.map { date ->
             val dayEvents = threeDayAllEvents.filter { it.occursOn(date) }
             buildHalfHourSlots(date, dayEvents)
@@ -305,27 +292,10 @@ fun CalendarScreen(
     }
     val threeDaySlotCount = threeDaySlots.firstOrNull()?.size ?: 0
 
-    LaunchedEffect(slots.size) {
-        selectedSlotIndex = selectedSlotIndex.coerceIn(0, slots.lastIndex.coerceAtLeast(0))
-    }
-
     // Default to 3-day view in landscape
     LaunchedEffect(dims.isLandscape) {
         if (dims.isLandscape && calendarViewMode == CalendarViewMode.MONTH) {
             onViewModeChange(CalendarViewMode.THREE_DAY)
-        }
-    }
-
-    LaunchedEffect(slotAnchorTime, selectedDate, slots) {
-        val target = slotAnchorTime ?: return@LaunchedEffect
-        if (target.toLocalDate() != selectedDate) return@LaunchedEffect
-        val index = slots.indexOfFirst { slot ->
-            val end = slot.start.plusMinutes(30)
-            target >= slot.start && target < end
-        }
-        if (index >= 0) {
-            selectedSlotIndex = index
-            selectedEventId = null
         }
     }
 
@@ -464,10 +434,6 @@ fun CalendarScreen(
                             isSettingsFocused = false
                             when (calendarViewMode) {
                                 CalendarViewMode.WEEK -> onViewModeChange(CalendarViewMode.MONTH)
-                                CalendarViewMode.DAY -> {
-                                    isWeatherFocused = false
-                                    onViewModeChange(CalendarViewMode.WEEK)
-                                }
                                 CalendarViewMode.THREE_DAY -> onViewModeChange(CalendarViewMode.MONTH)
                                 CalendarViewMode.MONTH -> {} // already at top level
                             }
@@ -515,7 +481,7 @@ fun CalendarScreen(
                         }
                         Key.DirectionRight, Key.DirectionDown -> {
                             isViewSwitcherFocused = false
-                            if (calendarViewMode == CalendarViewMode.DAY || !hasCalendarScope) {
+                            if (!hasCalendarScope) {
                                 isDateBarFocused = true
                             }
                             true
@@ -552,7 +518,7 @@ fun CalendarScreen(
                     }
                 }
 
-                // WEEK mode: encoder navigates days; Enter drills to DAY
+                // WEEK mode: encoder navigates days; Enter drills to THREE_DAY
                 // UP past start of week → header (then UP past header → MONTH)
                 if (calendarViewMode == CalendarViewMode.WEEK) {
                     return@onKeyEvent when (keyEvent.key) {
@@ -570,7 +536,7 @@ fun CalendarScreen(
                         }
                         Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
                             onDaySelectedFromGrid(selectedDate)
-                            onViewModeChange(CalendarViewMode.DAY)
+                            onViewModeChange(CalendarViewMode.THREE_DAY)
                             true
                         }
                         else -> false
@@ -780,119 +746,12 @@ fun CalendarScreen(
                     return@onKeyEvent false
                 }
 
-                // DAY mode handler — header focus (settings/viewswitcher) handled above
-                when (keyEvent.key) {
-                    Key.DirectionUp, Key.DirectionRight -> {
-                        if (isDateBarFocused) {
-                            if (isEditingDate) {
-                                onSelectDate(selectedDate.plusDays(1))
-                            } else {
-                                isDateBarFocused = false
-                                isViewSwitcherFocused = true
-                            }
-                            true
-                        } else if (isWeatherFocused) {
-                            isWeatherFocused = false
-                            isDateBarFocused = true
-                            true
-                        } else if (selectedSlotIndex == 0) {
-                            // Stop at weather row before date bar
-                            isWeatherFocused = true
-                            isWeatherExpanded = true
-                            true
-                        } else {
-                            selectedSlotIndex -= 1
-                            selectedEventId = null
-                            true
-                        }
-                    }
-
-                    Key.DirectionDown, Key.DirectionLeft -> {
-                        if (isDateBarFocused) {
-                            if (isEditingDate) {
-                                onSelectDate(selectedDate.minusDays(1))
-                            } else {
-                                isDateBarFocused = false
-                                isEditingDate = false
-                                // Stop at weather row before slots
-                                isWeatherFocused = true
-                                isWeatherExpanded = true
-                            }
-                            true
-                        } else if (isWeatherFocused) {
-                            isWeatherFocused = false
-                            isWeatherExpanded = false
-                            if (slots.isNotEmpty()) {
-                                selectedSlotIndex = 0
-                                selectedEventId = null
-                            }
-                            true
-                        } else if (selectedSlotIndex < slots.lastIndex) {
-                            selectedSlotIndex += 1
-                            selectedEventId = null
-                            true
-                        } else {
-                            true
-                        }
-                    }
-
-                    Key.Enter, Key.NumPadEnter, Key.Spacebar -> {
-                        if (isWeatherFocused) {
-                            isWeatherExpanded = !isWeatherExpanded
-                            true
-                        } else if (isDateBarFocused) {
-                            if (isEditingDate) {
-                                // While editing, Enter cycles through available calendars
-                                val writableCalendars = calendars.filter { it.isWritable }
-                                val nextCalendar = writableCalendars.firstOrNull { it.id != selectedCalendarId }
-                                if (nextCalendar != null) {
-                                    onSelectCalendar(nextCalendar.id)
-                                } else {
-                                    isEditingDate = false
-                                }
-                            } else {
-                                isEditingDate = true
-                            }
-                            true
-                        } else {
-                            val slot = slots.getOrNull(selectedSlotIndex)
-                            if (slot != null) {
-                                val selectedEvent = slot.events.firstOrNull { it.id == selectedEventId }
-                                if (selectedEvent != null) {
-                                    if (selectedEvent.isPromotedTask) {
-                                        eventActionTarget = selectedEvent
-                                        eventActionFocus = 0
-                                        showEventAction = true
-                                    }
-                                    // Non-promoted events: no-op (open in Google Calendar hint handled visually)
-                                    true
-                                } else if (slot.events.isNotEmpty()) {
-                                    selectedEventId = slot.events.first().id
-                                    true
-                                } else {
-                                    if (isPromotionDraftOpen) {
-                                        onOpenPromotionAt(slot.start)
-                                    } else {
-                                        showTaskPicker = true
-                                        taskPickerSlotTime = slot.start
-                                        taskPickerFocusIndex = 0
-                                        taskPickerExpandedList = 0
-                                    }
-                                    true
-                                }
-                            } else {
-                                true
-                            }
-                        }
-                    }
-
-                    else -> false
-                }
+                false
             }
             .padding(
                 top = dims.topPadding,
-                start = if (calendarViewMode == CalendarViewMode.DAY) dims.dayHorizontalPadding else dims.horizontalPadding,
-                end = if (calendarViewMode == CalendarViewMode.DAY) dims.dayHorizontalPadding else dims.horizontalPadding,
+                start = dims.horizontalPadding,
+                end = dims.horizontalPadding,
                 bottom = 12.dp
             ),
         verticalArrangement = Arrangement.spacedBy(dims.calendarElementSpacing)
@@ -989,30 +848,11 @@ fun CalendarScreen(
             options = listOf(
                 ViewSwitcherOption(key = "MONTH", label = "Month"),
                 ViewSwitcherOption(key = "WEEK", label = "Week"),
-                ViewSwitcherOption(key = "THREE_DAY", label = "3-Day"),
-                ViewSwitcherOption(key = "DAY", label = "Day")
+                ViewSwitcherOption(key = "THREE_DAY", label = "3-Day")
             ),
             selectedKey = calendarViewMode.name,
             onSelect = { key -> onViewModeChange(CalendarViewMode.valueOf(key)) }
         )
-
-        // WeekStrip only useful in DAY mode
-        if (calendarViewMode == CalendarViewMode.DAY) {
-            WeekStrip(
-                startDate = weekStart,
-                selectedDate = selectedDate,
-                eventsByDate = eventsByDate,
-                taskUrgencyByTaskId = taskUrgencyByTaskId,
-                onDateSelected = onSelectDate
-            )
-            // Visual break between chrome and timeline content
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(LocalWallColors.current.dividerColor)
-            )
-        }
 
         when {
             !hasCalendarScope -> {
@@ -1064,14 +904,14 @@ fun CalendarScreen(
                             weatherForecast = weatherForecast,
                             onDaySelected = { date ->
                                 onDaySelectedFromGrid(date)
-                                onViewModeChange(CalendarViewMode.DAY)
+                                onViewModeChange(CalendarViewMode.THREE_DAY)
                             },
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(horizontal = 4.dp, vertical = 4.dp)
                         )
                         CalendarViewMode.THREE_DAY -> Calendar3DayView(
-                            centerDate = selectedDate,
+                            startDate = selectedDate,
                             allEvents = eventsForRange.values.flatten(),
                             selectedDayOffset = threeDaySelectedColumn,
                             selectedSlotIndex = threeDaySlotIndex,
@@ -1080,7 +920,7 @@ fun CalendarScreen(
                             taskUrgencyByTaskId = taskUrgencyByTaskId,
                             onSlotActivated = { date, time ->
                                 val daySlots = threeDaySlots.getOrNull(
-                                    listOf(selectedDate.minusDays(1), selectedDate, selectedDate.plusDays(1))
+                                    listOf(selectedDate, selectedDate.plusDays(1), selectedDate.plusDays(2))
                                         .indexOf(date)
                                 )
                                 val slot = daySlots?.firstOrNull { it.start == time }
@@ -1108,55 +948,6 @@ fun CalendarScreen(
                                 taskPickerExpandedList = 0
                             },
                             weatherForecast = weatherForecast,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                        CalendarViewMode.DAY -> CalendarDayView(
-                            date = selectedDate,
-                            events = events,
-                            selectedSlotStart = if (!isWeatherFocused && !isDateBarFocused) slots.getOrNull(selectedSlotIndex)?.start else null,
-                            selectedEventId = selectedEventId,
-                            taskListTitleByTaskId = taskListTitleByTaskId,
-                            taskUrgencyByTaskId = taskUrgencyByTaskId,
-                            onSlotActivated = { time ->
-                                val idx = slots.indexOfFirst { it.start == time }
-                                if (idx >= 0) selectedSlotIndex = idx
-                                selectedEventId = null
-                                val slot = slots.getOrNull(idx)
-                                if (slot != null && slot.events.isEmpty()) {
-                                    if (isPromotionDraftOpen) {
-                                        onOpenPromotionAt(time)
-                                    } else {
-                                        showTaskPicker = true
-                                        taskPickerSlotTime = time
-                                        taskPickerFocusIndex = 0
-                                        taskPickerExpandedList = 0
-                                    }
-                                } else {
-                                    onOpenPromotionAt(time)
-                                }
-                            },
-                            onEventActivated = { event ->
-                                if (event.isPromotedTask) {
-                                    eventActionTarget = event
-                                    eventActionFocus = 0
-                                    showEventAction = true
-                                } else {
-                                    selectedEventId = event.id
-                                }
-                            },
-                            onSlotRangeSelected = { range ->
-                                pendingDragRange = range
-                                showTaskPicker = true
-                                taskPickerSlotTime = range.startTime
-                                taskPickerFocusIndex = 0
-                                taskPickerExpandedList = 0
-                            },
-                            weatherForecast = weatherForecast,
-                            isWeatherExpanded = isWeatherExpanded,
-                            onToggleWeatherExpanded = { isWeatherExpanded = !isWeatherExpanded },
-                            isWeatherFocused = isWeatherFocused,
-                            geminiKeyPresent = geminiKeyPresent,
-                            dayOrganizerIdle = dayOrganizerState is DayOrganizerState.Idle,
                             planBlocks = planBlocks,
                             recentlyCreatedEventIds = recentlyCreatedEventIds,
                             modifier = Modifier.fillMaxSize()
@@ -1436,7 +1227,7 @@ private fun DateAndCalendarBar(
     hasCalendarScope: Boolean,
     isFocused: Boolean,
     isEditing: Boolean,
-    calendarViewMode: CalendarViewMode = CalendarViewMode.DAY,
+    calendarViewMode: CalendarViewMode = CalendarViewMode.THREE_DAY,
     onSelectDate: (LocalDate) -> Unit,
     onSelectCalendar: (String) -> Unit
 ) {

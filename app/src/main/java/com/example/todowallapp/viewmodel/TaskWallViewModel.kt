@@ -1545,10 +1545,7 @@ class TaskWallViewModel(
                 Pair(today, today.plusDays(6))
             }
             CalendarViewMode.THREE_DAY -> {
-                Pair(anchor.minusDays(1), anchor.plusDays(1))
-            }
-            CalendarViewMode.DAY -> {
-                Pair(anchor, anchor)
+                Pair(anchor, anchor.plusDays(2))
             }
         }
 

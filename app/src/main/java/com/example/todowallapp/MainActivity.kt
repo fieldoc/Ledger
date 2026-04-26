@@ -559,7 +559,7 @@ private fun WallModeContent(
                         onPlanDay = {
                             scope.launch {
                                 pagerState.animateScrollToPage(1)
-                                viewModel.setCalendarViewMode(com.example.todowallapp.data.model.CalendarViewMode.DAY)
+                                viewModel.setCalendarViewMode(com.example.todowallapp.data.model.CalendarViewMode.THREE_DAY)
                                 viewModel.startDayOrganizer()
                             }
                         },
@@ -711,6 +711,8 @@ private fun WallModeContent(
         var calendarInitialized by remember { mutableStateOf(false) }
         LaunchedEffect(pagerState.currentPage, uiState.hasCalendarScope) {
             if (pagerState.currentPage == 1 && uiState.hasCalendarScope) {
+                // Always snap back to today every time the calendar tab is entered
+                viewModel.selectCalendarDate(java.time.LocalDate.now())
                 if (!calendarInitialized) {
                     // Default to MONTH view on first calendar entry only
                     viewModel.setCalendarViewMode(CalendarViewMode.MONTH)
